@@ -1,0 +1,285 @@
+# Gemini YouTube Automation — upgraded workflow with DYPOL dispatch inputs.
+#
+# Replace .github/workflows/main.yml in YOUR FORK of
+# your GitHub fork of `gemini-youtube-automation` with this file
+# (never push to upstream without permission).
+#
+# What changed vs upstream:
+#   1. workflow_dispatch now accepts: phase, topic, privacy, language, job_id
+#   2. upload visibility comes from the YOUTUBE_PRIVACY_STATUS env (default
+#      private — required by DYPOL Creator Console safety defaults)
+#   3. Gemini text model is configurable (GEMINI_TEXT_MODEL) and defaults to a
+#      current model — upstream hard-coded gemini-2.5-flash which Google
+#      retired on 2026-10-20
+#   4. artifacts carry a run manifest for dashboard correlation
+#   5. the daily schedule is preserved (cron 0 7 * * * = 12:30 PM IST)
+#
+# Secrets (unchanged from upstream, plus optional new ones):
+#   CLIENT_SECRET_B64, CREDENTIALS_B64, GOOGLE_API_KEY, PEXELS_API_KEY
+#   GEMINI_TEXT_MODEL (optional, as a variable)
+
+name: Autonomous AI Course Generator
+
+on:
+  schedule:
+    - cron: '0 7 * * *' # 12:30 PM IST daily
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: 'Execution phase (draft produces without publishing)'
+        required: true
+        default: 'full'
+        type: choice
+        options: [draft, publish, full]
+      topic:
+        description: 'Optional lesson topic override'
+        required: false
+        default: ''
+      privacy:
+        description: 'YouTube visibility'
+        required: false
+        default: 'private'
+        type: choice
+        options: [private, unlisted, public]
+      language:
+        description: 'Content language'
+        required: false
+        default: 'en'
+      job_id:
+        description: 'DYPOL job ID (for dashboard correlation)'
+        required: false
+        default: ''
+      review_required:
+        description: 'Console review-required policy (blocks full-phase uploads)'
+        required: false
+        default: '1'
+      auto_publish:
+        description: 'Console auto-publish policy (full-phase uploads only if 1 AND review_required=0)'
+        required: false
+        default: '0'
+      title_override:
+        description: 'Title approved in the DYPOL review panel (used for upload)'
+        required: false
+        default: ''
+      description_override:
+        description: 'Description approved in the DYPOL review panel'
+        required: false
+        default: ''
+
+# A run takes far longer than the gap between a manual dispatch and the daily
+# schedule, so serialise them — two runs pushing to main race each other.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Schedule gate: the DYPOL Creator Console writes dypol-control.json to this
+  # repo; scheduled runs exit here when schedule_enabled=false. Manual runs
+  # (workflow_dispatch) always proceed.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] && [ -f dypol-control.json ]; then
+            ENABLED=$(python3 -c "import json;print(str(json.load(open('dypol-control.json')).get('schedule_enabled', True)))" 2>/dev/null || echo True)
+            if [ "$ENABLED" = "False" ]; then
+              echo "⏸ Scheduled automation is PAUSED via DYPOL Creator Console."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+  build-and-deploy:
+    needs: gate
+    if: ${{ needs.gate.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write   # pushes content_plan.json + dypol-results/ commits
+
+    steps:
+      - name: ⬇️ Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install dependencies and patch ImageMagick
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick ffmpeg
+          POLICY_FILE=$(find /etc -name "policy.xml" 2>/dev/null | grep -i "ImageMagick" | head -n 1)
+          if [ -z "$POLICY_FILE" ]; then
+            echo "❌ CRITICAL: Could not find ImageMagick's policy.xml file!"
+            exit 1
+          fi
+          echo "✅ Found policy file at: $POLICY_FILE, applying patches..."
+          sudo sed -i 's/<policy domain="resource" name="width" value=".*"\/>/<policy domain="resource" name="width" value="16384"\/>/' "$POLICY_FILE"
+          sudo sed -i 's/<policy domain="resource" name="height" value=".*"\/>/<policy domain="resource" name="height" value="16384"\/>/' "$POLICY_FILE"
+
+          echo "--- Installing Python packages ---"
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          echo "✅ Dependencies installed."
+
+      - name: 🔑 Restore API credentials from base64
+        run: |
+          echo "${{ secrets.CLIENT_SECRET_B64 }}" | base64 -d > client_secrets.json
+          echo "${{ secrets.CREDENTIALS_B64 }}" | base64 -d > credentials.json
+        shell: bash
+
+      - name: 🚀 Run Autonomous Production Pipeline
+        id: production-run
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          # DYPOL additions: configurable text model + safe upload visibility
+          GEMINI_TEXT_MODEL: ${{ vars.GEMINI_TEXT_MODEL || 'gemini-3.6-flash' }}
+          YOUTUBE_PRIVACY_STATUS: ${{ inputs.privacy || 'private' }}
+          # Phase semantics are enforced in dypol_control.py (see code_patches.md):
+          #   draft   → generate + save candidate, NEVER upload
+          #   publish → upload the saved candidate for this job only, NEVER generate
+          #   full    → upload only when auto-publish is explicitly allowed
+          DYPOL_PHASE: ${{ inputs.phase || 'full' }}
+          DYPOL_TOPIC: ${{ inputs.topic || '' }}
+          DYPOL_JOB_ID: ${{ inputs.job_id || '' }}
+          DYPOL_REVIEW_REQUIRED: ${{ inputs.review_required || '1' }}
+          DYPOL_AUTO_PUBLISH: ${{ inputs.auto_publish || '0' }}
+        run: python main.py
+
+      - name: 📝 Write run manifest for the dashboard
+        if: always()
+        run: |
+          cat > output/run_manifest.json <<EOF
+          {
+            "job_id": "${{ inputs.job_id }}",
+            "phase": "${{ inputs.phase || 'full' }}",
+            "privacy": "${{ inputs.privacy || 'private' }}",
+            "model": "${{ vars.GEMINI_TEXT_MODEL || 'gemini-3.6-flash' }}",
+            "conclusion": "${{ steps.production-run.outcome }}",
+            "run_id": "${{ github.run_id }}"
+          }
+          EOF
+
+      - name: 🔎 Upload Audio Artifact for Debugging
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-debug-files
+          path: output/*.wav
+          if-no-files-found: warn
+
+      - name: 🎥 Upload Final Video for Debugging
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-videos
+          path: output/*.mp4
+          if-no-files-found: warn
+
+      - name: 🗂️ Upload run manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-manifest
+          path: output/run_manifest.json
+          if-no-files-found: warn
+
+      - name: ✅ Publish verified upload result (dypol-results/ + artifact backup)
+        if: steps.production-run.outcome == 'success'
+        run: |
+          # The patched pipeline writes output/upload_results.json — a
+          # MULTI-VIDEO record (long-form + Short kept separately, both IDs and
+          # URLs). See engines/engine-a-patches/code_patches.md. The console
+          # syncs this file to record the REAL YouTube video IDs — it never
+          # guesses a video ID and never marks a draft-only run as published.
+          RESULT_SRC=""
+          for f in output/upload_results.json output/upload_result.json; do
+            if [ -f "$f" ]; then RESULT_SRC="$f"; break; fi
+          done
+          if [ -n "$RESULT_SRC" ]; then
+            mkdir -p dypol-results upload-backup
+            cp "$RESULT_SRC" "dypol-results/${{ github.run_id }}.json"
+            cp "$RESULT_SRC" upload-backup/upload_result.json
+            git config user.name 'github-actions[bot]'
+            git config user.email 'github-actions[bot]@users.noreply.github.com'
+            git add "dypol-results/${{ github.run_id }}.json"
+            git commit -m "dypol: verified upload result for run ${{ github.run_id }}" || true
+            for attempt in 1 2 3; do
+              git fetch origin main && git rebase origin/main && git push && break
+              echo "push attempt $attempt failed, retrying..."
+            done
+          else
+            echo "::notice::No upload result file — this run produced a draft only (console will show it as awaiting review, never as published)."
+          fi
+
+      - name: 🗃️ Backup upload result artifact (recovery if git push fails)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upload-result-${{ github.run_id }}
+          path: upload-backup/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: 🎞️ Generate demo GIF from latest video
+        if: steps.production-run.outcome == 'success'
+        run: |
+          VIDEO=$(ls output/long_video_*.mp4 2>/dev/null | head -n 1)
+          if [ -n "$VIDEO" ]; then
+            echo "✅ Found video: $VIDEO — converting to GIF..."
+            ffmpeg -y -ss 0 -t 12 -i "$VIDEO" \
+              -filter_complex "[0:v] fps=8,scale=320:-1:flags=lanczos,split [a][b];[a] palettegen [p];[b][p] paletteuse" \
+              images/demo.gif
+            echo "✅ Demo GIF created at images/demo.gif"
+          else
+            echo "⚠️ No long video found in output/, skipping GIF creation."
+          fi
+
+      - name: 💾 Commit and push content plan and demo GIF
+        if: steps.production-run.outcome == 'success' && (inputs.phase == 'full' || inputs.phase == '' || github.event_name == 'schedule')
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+          # The production run takes long enough that main can move on beneath us,
+          # which makes a plain push a non-fast-forward. Both files are generated
+          # artifacts, so replay this run's copies onto whatever main is now.
+          STAGING=$(mktemp -d)
+          cp content_plan.json "$STAGING/"
+          if [ -f images/demo.gif ]; then cp images/demo.gif "$STAGING/"; fi
+
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git reset --hard origin/main
+
+            cp "$STAGING/content_plan.json" content_plan.json
+            if [ -f "$STAGING/demo.gif" ]; then cp "$STAGING/demo.gif" images/demo.gif; fi
+
+            git add content_plan.json images/demo.gif
+            if git diff --cached --quiet; then
+              echo "✅ Nothing to commit — main is already up to date."
+              exit 0
+            fi
+
+            git commit -m "feat: Update content plan and demo GIF after daily video production"
+            if git push; then
+              echo "✅ Pushed on attempt $attempt."
+              exit 0
+            fi
+            echo "⚠️ Push rejected on attempt $attempt — main moved again, retrying..."
+          done
+
+          echo "❌ Could not push after 3 attempts."
+          exit 1

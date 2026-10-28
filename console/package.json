@@ -1,0 +1,19 @@
+{
+  "name": "dypol-creator-console",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "DYPOL Creator Console — dual-engine AI YouTube automation dashboard (DYPOL LABS)",
+  "scripts": {
+    "dev": "node ../dev/server.js",
+    "preflight": "node -e \"const fs=require('fs');const need=['index.html','wrangler.toml','functions/api/health.js','schema.sql','assets/js/app.js'];const miss=need.filter(f=>!fs.existsSync(f));if(miss.length){console.error('Preflight FAILED — missing (are you in console/?):',miss.join(', '));process.exit(1)}console.log('Preflight OK — console/ is complete; safe to deploy this directory.')\"",
+    "deploy": "npm run preflight && wrangler pages deploy .",
+    "db:create": "wrangler d1 create dypol-console",
+    "db:schema": "wrangler d1 execute dypol-console --file=schema.sql",
+    "db:migrate": "wrangler d1 execute dypol-console --file=migrations/002.sql",
+    "hash-password": "node scripts/hash-password.cjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

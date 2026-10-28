@@ -1,0 +1,6 @@
+{
+  "name": "dypol-console-tests",
+  "private": true,
+  "type": "module",
+  "description": "Test harness for DYPOL Creator Console"
+}

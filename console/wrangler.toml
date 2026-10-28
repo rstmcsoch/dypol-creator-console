@@ -1,0 +1,42 @@
+# DYPOL Creator Console — Cloudflare Pages project
+#
+# ⚠️ This file lives INSIDE console/. All paths are relative to this file.
+#
+# Canonical deploy flow (run from the console/ directory — never deploy the
+# repo root, which would nest the app one level too deep):
+#
+#   cd dypol-creator-console/console
+#   npm run preflight     # refuses to deploy unless index.html + functions/ are here
+#   npm run deploy        # = wrangler pages deploy .
+#
+# Android-tablet route (no CLI): Cloudflare Dashboard → Workers & Pages →
+# Create → Pages → "Upload assets" → select/zip the console/ folder contents.
+# Full steps: docs/DEPLOYMENT.md
+#
+# Bindings/secrets (dashboard → Settings → Environment variables and Secrets,
+# or `npx wrangler pages secret put <NAME>` run from console/):
+#   ADMIN_PASSWORD_HASH   pbkdf2 hash (generate: node scripts/hash-password.cjs)
+#   SESSION_SECRET        long random string for HMAC session cookies
+#   GITHUB_TOKEN          fine-grained PAT (Actions r/w, Contents r/w on the two
+#                         engine forks) — server only
+#   GEMINI_API_KEY        optional, provider readiness checks — server only
+#   YOUTUBE_CLIENT_SECRET_B64  base64 OAuth client secret — server only
+#   YOUTUBE_TOKEN_B64          base64 OAuth user token — server only
+
+name = "dypol-creator-console"
+compatibility_date = "2026-10-01"
+
+# The Pages "output directory" IS this directory (console/). It must be "."
+# here — "console" would resolve to console/console (does not exist) and the
+# documented commands would deploy an empty tree.
+pages_build_output_dir = "."
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dypol-console"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+# Apply the schema ONCE after creating the DB (run from console/):
+#   npx wrangler d1 execute dypol-console --file=schema.sql
+# Existing databases created before the audit release also need:
+#   npx wrangler d1 execute dypol-console --file=migrations/002.sql

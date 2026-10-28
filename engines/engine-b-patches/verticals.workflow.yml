@@ -1,0 +1,351 @@
+name: DYPOL · Verticals production (manual + schedule)
+
+# DYPOL Creator Console dispatch interface for Verticals v3 in YOUR FORK.
+# Phase semantics (enforced by job structure, not just comments):
+#   phase=draft    -> produce the video and SAVE the candidate (artifact +
+#                     durable dypol-drafts/<job_id>.json snapshot). NO upload.
+#   phase=publish  -> retrieve the EXACT approved draft produced by an earlier
+#                     run (durable snapshot -> producing run's artifact), apply
+#                     the approved metadata/visibility, validate, upload ONLY
+#                     that candidate, persist the result. Never generates.
+#   phase=full     -> produce + upload in one run (console only dispatches this
+#                     when its policy explicitly allows automatic publishing).
+#
+# A missing/expired draft FAILS the publish job with a clear message — it never
+# silently regenerates or uploads a replacement.
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: 'Execution phase'
+        required: false
+        default: 'draft'
+        type: choice
+        options: [draft, publish, full]
+      topic:
+        description: 'Explicit topic (leave empty for auto-discovery)'
+        required: false
+        default: ''
+      niche:
+        description: 'Content niche'
+        required: false
+        default: 'science & tech'
+      privacy:
+        description: 'YouTube visibility for the upload phase'
+        required: false
+        default: 'private'
+        type: choice
+        options: [private, unlisted, public]
+      language:
+        description: 'Content + voice language code'
+        required: false
+        default: 'en'
+      job_id:
+        description: 'DYPOL job ID (for dashboard correlation + draft handoff)'
+        required: false
+        default: ''
+      draft_run_id:
+        description: 'Producing run ID of the approved draft (publish phase)'
+        required: false
+        default: ''
+      title_override:
+        description: 'Title approved in the DYPOL review panel (used for upload)'
+        required: false
+        default: ''
+      description_override:
+        description: 'Description approved in the DYPOL review panel'
+        required: false
+        default: ''
+      tags_override:
+        description: 'Comma-separated tags approved in the DYPOL review panel'
+        required: false
+        default: ''
+      review_required:
+        description: 'Console review-required policy (blocks full-phase uploads)'
+        required: false
+        default: '1'
+      auto_publish:
+        description: 'Console auto-publish policy (full-phase uploads only if 1 AND review_required=0)'
+        required: false
+        default: '0'
+
+  schedule:
+    - cron: '30 9 * * *'
+
+concurrency:
+  group: verticals-production
+  cancel-in-progress: false
+
+# Least privilege, scoped per job: only the jobs that push result/draft files
+# get contents: write; the gate job stays read-only.
+permissions:
+  contents: read
+
+jobs:
+  # Schedule gate: the DYPOL Creator Console writes dypol-control.json here;
+  # scheduled runs exit when schedule_enabled=false. Manual dispatch proceeds.
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] && [ -f dypol-control.json ]; then
+            ENABLED=$(python3 -c "import json;print(str(json.load(open('dypol-control.json')).get('schedule_enabled', True)))" 2>/dev/null || echo True)
+            if [ "$ENABLED" = "False" ]; then
+              echo "⏸ Scheduled automation is PAUSED via DYPOL Creator Console."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+  produce:
+    needs: gate
+    if: ${{ needs.gate.outputs.skip != 'true' && inputs.phase != 'publish' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write   # commits the durable draft snapshot (dypol-drafts/)
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      BROLL_ALLOW_FALLBACK: ${{ vars.BROLL_ALLOW_FALLBACK || '1' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Make credentials readable
+        run: |
+          if [ -n "${{ secrets.YOUTUBE_TOKEN_JSON }}" ]; then
+            echo "${{ secrets.YOUTUBE_TOKEN_JSON }}" > credentials.json
+          else
+            echo "::warning::YOUTUBE_TOKEN_JSON missing — upload phase will fail."
+          fi
+
+      - name: Generate draft (research → script)
+        run: |
+          set -euo pipefail
+          mkdir -p drafts produced
+          ARGS=(--niche "${{ inputs.niche }}" --lang "${{ inputs.language }}" --provider gemini)
+          if [ -n "${{ inputs.topic }}" ]; then ARGS+=(--topic "${{ inputs.topic }}"); else ARGS+=(--discover --auto-pick); fi
+          python -m verticals draft "${ARGS[@]}"
+
+      - name: Produce video (voice, captions, music, thumbnail)
+        run: |
+          set -euo pipefail
+          DRAFT=$(ls -t drafts/*.json 2>/dev/null | head -n 1)
+          if [ -z "$DRAFT" ]; then echo "No draft JSON produced"; exit 1; fi
+          echo "Using draft: $DRAFT"
+          python -m verticals produce --draft "$DRAFT" --lang "${{ inputs.language }}" --voice edge
+
+      - name: Save durable draft snapshot (handoff record)
+        env:
+          JOB_ID: ${{ inputs.job_id || github.run_id }}
+        run: |
+          # The snapshot tells the publish run EXACTLY which artifact holds the
+          # approved draft + media, so a later publish run can retrieve it even
+          # though the two runs are separate. Small JSON only — media stays in
+          # the artifact below.
+          DRAFT=$(ls -t drafts/*.json 2>/dev/null | head -n 1)
+          mkdir -p dypol-drafts
+          python3 - "$DRAFT" "$JOB_ID" <<'PY'
+          import json, os, sys, glob
+          draft_file, job_id = sys.argv[1], sys.argv[2]
+          snap = {
+              "job_id": job_id,
+              "producing_run_id": os.environ["GITHUB_RUN_ID"],
+              "artifact_name": f"draft-{job_id}",
+              "draft_file": os.path.basename(draft_file),
+              "media": sorted(glob.glob("produced/**/*", recursive=True) + glob.glob("output/**/*", recursive=True)),
+          }
+          draft = json.load(open(draft_file))
+          snap["upload_metadata"] = draft.get("upload_metadata", {})
+          snap["pipeline_state"] = {k: {"status": v.get("status")} for k, v in (draft.get("_pipeline_state") or {}).items() if isinstance(v, dict)}
+          with open(f"dypol-drafts/{job_id}.json", "w") as fh:
+              json.dump(snap, fh, indent=2)
+          print(f"durable handoff snapshot → dypol-drafts/{job_id}.json (run {snap['producing_run_id']})")
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add "dypol-drafts/${JOB_ID}.json"
+          git commit -m "dypol: durable draft snapshot for job ${JOB_ID}" || true
+          for attempt in 1 2 3; do
+            git fetch origin main && git rebase origin/main && git push && break
+            echo "push attempt $attempt failed, retrying..."
+          done
+
+      - name: Upload draft artifact (approved-candidate handoff)
+        uses: actions/upload-artifact@v4
+        with:
+          name: draft-${{ inputs.job_id || github.run_id }}
+          path: |
+            drafts/*.json
+            produced/**
+            output/**
+          retention-days: 14
+          if-no-files-found: warn
+
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [gate, produce]
+    if: ${{ always() && needs.gate.outputs.skip != 'true' && (inputs.phase == 'publish' || (inputs.phase == 'full' && needs.produce.result == 'success')) }}
+    permissions:
+      contents: write   # commits the verified upload result (dypol-results/)
+    env:
+      YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Make credentials readable
+        run: |
+          if [ -n "${{ secrets.YOUTUBE_TOKEN_JSON }}" ]; then
+            echo "${{ secrets.YOUTUBE_TOKEN_JSON }}" > credentials.json
+          else
+            echo "::error::YOUTUBE_TOKEN_JSON secret missing — cannot upload."
+            exit 1
+          fi
+
+      # ---- phase=publish: retrieve the EXACT approved draft from the producing run
+      - name: Resolve approved draft (durable snapshot → producing-run artifact)
+        if: ${{ inputs.phase == 'publish' }}
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: draft-${{ inputs.job_id }}
+          run-id: ${{ inputs.draft_run_id || '' }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          path: handoff
+
+      - name: Locate + validate approved draft (fail safely if missing)
+        if: ${{ inputs.phase == 'publish' }}
+        id: locate
+        run: |
+          set -euo pipefail
+          # Preferred source: durable snapshot + the artifact it points at.
+          if [ -f "dypol-drafts/${{ inputs.job_id }}.json" ]; then
+            SNAP="dypol-drafts/${{ inputs.job_id }}.json"
+            PRODUCING_RUN=$(python3 -c "import json;print(json.load(open('$SNAP'))['producing_run_id'])")
+            DRAFT_SOURCE="durable"
+            echo "Durable snapshot found (producing run $PRODUCING_RUN)"
+          else
+            PRODUCING_RUN="${{ inputs.draft_run_id }}"
+            DRAFT_SOURCE="artifact"
+          fi
+          DRAFT=$(ls -t handoff/drafts/*.json drafts/*.json 2>/dev/null | head -n 1 || true)
+          if [ -z "$DRAFT" ]; then
+            echo "::error::Approved draft for job ${{ inputs.job_id }} not found (producing run ${PRODUCING_RUN:-unknown})."
+            echo "::error::The artifact may have expired (14-day retention) or the job id is wrong."
+            echo "::error::No upload was attempted and nothing was regenerated — re-run phase=draft deliberately to create a new candidate."
+            exit 2
+          fi
+          echo "Using approved draft: $DRAFT (source: $DRAFT_SOURCE)"
+          python3 scripts/apply_draft_overrides.py --draft "$DRAFT" --validate
+          echo "draft=$DRAFT" >> "$GITHUB_OUTPUT"
+          echo "producing_run=$PRODUCING_RUN" >> "$GITHUB_OUTPUT"
+          echo "draft_source=$DRAFT_SOURCE" >> "$GITHUB_OUTPUT"
+
+      # ---- phase=full: the artifact just produced in this run
+      - name: Download produced artifacts (phase=full)
+        if: ${{ inputs.phase == 'full' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: draft-${{ inputs.job_id || github.run_id }}
+          path: handoff
+
+      - name: Apply approved metadata + visibility, show insert body
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.phase }}" = "publish" ]; then
+            DRAFT="${{ steps.locate.outputs.draft }}"
+          else
+            DRAFT=$(ls -t handoff/drafts/*.json drafts/*.json 2>/dev/null | head -n 1 || true)
+            if [ -z "$DRAFT" ]; then
+              echo "::error::No produced draft found in this run. No upload was attempted."
+              exit 2
+            fi
+          fi
+          python3 scripts/apply_draft_overrides.py --draft "$DRAFT" --apply \
+            --title "${{ inputs.title_override }}" \
+            --description "${{ inputs.description_override }}" \
+            --tags "${{ inputs.tags_override }}" \
+            --privacy "${{ inputs.privacy }}" \
+            --print-insert-body
+          echo "DRAFT=$DRAFT" >> "$GITHUB_ENV"
+
+      - name: Upload to YouTube (approved candidate only — visibility ${{ inputs.privacy }})
+        env:
+          YOUTUBE_PRIVACY_STATUS: ${{ inputs.privacy }}
+        run: |
+          set -euo pipefail
+          python -m verticals upload --draft "$DRAFT" --lang "${{ inputs.language }}"
+
+      - name: ✅ Record verified upload result (dypol-results/ + artifact)
+        if: always()
+        env:
+          PRODUCING_RUN: ${{ steps.locate.outputs.producing_run || github.run_id }}
+          DRAFT_SOURCE: ${{ steps.locate.outputs.draft_source || 'same-run' }}
+        run: |
+          # Primary record: committed to dypol-results/<run_id>.json for the
+          # console sync. Backup: the same file as a workflow artifact, so a
+          # git-push failure after a successful upload cannot lose the record
+          # (the console can recover the ID from the run artifact).
+          python3 scripts/report_upload.py \
+            --draft "${DRAFT:-$(ls -t drafts/*.json 2>/dev/null | head -n 1 || echo /dev/null)}" \
+            --job-id "${{ inputs.job_id }}" \
+            --run-id "${{ github.run_id }}" \
+            --producing-run-id "$PRODUCING_RUN" \
+            --draft-source "$DRAFT_SOURCE" \
+            --out "dypol-results/${{ github.run_id }}.json" || true
+          if [ -f "dypol-results/${{ github.run_id }}.json" ]; then
+            mkdir -p upload-backup
+            cp "dypol-results/${{ github.run_id }}.json" upload-backup/upload_result.json
+            git config user.name 'github-actions[bot]'
+            git config user.email 'github-actions[bot]@users.noreply.github.com'
+            git add "dypol-results/${{ github.run_id }}.json"
+            git commit -m "dypol: verified upload result for run ${{ github.run_id }}" || true
+            for attempt in 1 2 3; do
+              git fetch origin main && git rebase origin/main && git push && break
+              echo "push attempt $attempt failed, retrying..."
+            done
+          else
+            echo "::notice::No upload result file — console will not mark this run as published."
+          fi
+
+      - name: Backup upload result artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upload-result-${{ github.run_id }}
+          path: upload-backup/
+          retention-days: 14
+          if-no-files-found: ignore
