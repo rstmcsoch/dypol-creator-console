@@ -34,7 +34,7 @@ pages_build_output_dir = "."
 [[d1_databases]]
 binding = "DB"
 database_name = "dypol-console"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "455ddda4-8d71-49c3-bad4-8200f4ee25eb"
 
 # Apply the schema ONCE after creating the DB (run from console/):
 #   npx wrangler d1 execute dypol-console --file=schema.sql
