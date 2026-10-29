@@ -11,6 +11,7 @@
     "db:create": "wrangler d1 create dypol-console",
     "db:schema": "wrangler d1 execute dypol-console --file=schema.sql",
     "db:migrate": "wrangler d1 execute dypol-console --file=migrations/002.sql",
+    "db:migrate:003": "wrangler d1 execute dypol-console --remote --file=migrations/003.sql",
     "hash-password": "node scripts/hash-password.cjs"
   },
   "devDependencies": {

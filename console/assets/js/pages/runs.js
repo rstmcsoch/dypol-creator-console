@@ -4,6 +4,7 @@ import {
   icon, esc, statusPill, enginePill, fmtDateTime, fmtDuration, toast, openDrawer,
   renderLogs, emptyState,
 } from '../ui.js';
+import { mountProgress } from '../progress.js';
 
 function runDrawer(r) {
   const failedStep = (r.steps || []).find((s) => s.status === 'failed');
@@ -22,6 +23,7 @@ function runDrawer(r) {
       <dt>Conclusion</dt><dd>${esc(r.status)}</dd>
       ${r.failureReason ? `<dt>Failure reason</dt><dd style="color:var(--red)">${esc(r.failureReason)}</dd>` : ''}
     </dl>
+    ${r.demo ? '' : '<div id="run-progress" aria-live="polite"></div>'}
     ${failedStep ? `<div class="callout callout--danger">${icon('alert')}<div><strong>Failed step: ${esc(failedStep.name)}.</strong> ${esc(failedStep.note || 'See logs below.')}</div></div>` : ''}
     <div>
       <strong class="small">Steps</strong>
@@ -49,6 +51,12 @@ function runDrawer(r) {
     ${r.githubUrl ? `<a class="btn btn--secondary btn--sm" href="${esc(r.githubUrl)}" target="_blank" rel="noopener">${icon('github', 'icon--sm')} GitHub Actions run</a>` : ''}
     <button class="btn btn--primary btn--sm" data-ract="retry" ${r.status === 'failed' ? '' : 'disabled'}>${icon('refresh', 'icon--sm')} Retry failed run</button>`;
   openDrawer({ title: 'Run detail', body, foot });
+  // Poll live progress only while the run is active; refresh the table when it ends.
+  if (['in-progress', 'queued'].includes(r.status)) {
+    mountProgress(document.getElementById('run-progress'), `/api/runs/${encodeURIComponent(r.id)}/progress`, {
+      onDone: () => { refresh().catch(() => {}); },
+    });
+  }
   document.getElementById('drawer-foot').addEventListener('click', async (e) => {
     if (!e.target.closest('[data-ract="retry"]')) return;
     try {

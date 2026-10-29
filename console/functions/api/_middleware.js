@@ -1,6 +1,8 @@
 /**
  * Session guard for every /api route.
- * Exceptions: /api/auth/* (login/logout) and /api/health (connection probe).
+ * Exceptions: /api/auth/* (login/logout), /api/health (connection probe) and
+ * POST /api/webhooks/github (authenticated by its own HMAC signature check —
+ * unsigned / wrongly signed deliveries are rejected by the handler).
  * Every state-changing route is protected — unauthenticated visitors cannot
  * start production, alter settings, or publish to YouTube.
  *
@@ -14,6 +16,13 @@ export async function onRequest(context) {
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method.toUpperCase();
+
+  // GitHub webhook: no cookie, no Origin; the handler verifies
+  // X-Hub-Signature-256 against GITHUB_WEBHOOK_SECRET before doing anything.
+  if (path === '/api/webhooks/github') {
+    if (method !== 'POST') return json(null, 405, { ok: false, error: 'Use POST.' });
+    return context.next();
+  }
 
   // CSRF: for state-changing requests, if an Origin header exists it must
   // match this deployment (browsers always send Origin on POST).

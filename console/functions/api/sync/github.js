@@ -5,11 +5,13 @@ import {
 } from '../_lib/db.js';
 import {
   splitRepo, listWorkflowRuns, listRunArtifacts,
-  listRepoDir, fetchRepoFile, dispatchWorkflow,
+  listRepoDir, fetchRepoFile,
 } from '../_lib/github.js';
 import {
-  findDuplicate, recordPublished, classifyError, buildQuality,
+  recordPublished, classifyError, buildQuality,
 } from '../_lib/safeguards.js';
+import { maybeDispatchFallback } from '../_lib/fallback.js';
+import { findLocalRun, ensureProgressSchema, mapRunStatus } from '../_lib/webhook.js';
 
 /**
  * POST /api/sync/github — pull real GitHub Actions state into the job registry.
@@ -33,6 +35,7 @@ export async function onRequestPost(context) {
   if (!token) {
     return json(null, 409, { ok: false, message: 'GITHUB_TOKEN not configured — cannot sync from GitHub.' });
   }
+  await ensureProgressSchema(db);
   const settings = await getSettings(db);
   const runs = await listRuns(db);
   let updated = 0, fallbackDispatched = 0, uploadsRecorded = 0;
@@ -100,25 +103,17 @@ export async function onRequestPost(context) {
     }
 
     for (const ghr of ghRuns) {
-      const status = ghr.conclusion === 'success' ? 'completed'
-        : ghr.conclusion === 'failure' ? 'failed'
-        : ghr.conclusion === 'cancelled' ? 'cancelled'
-        : ghr.status === 'in_progress' ? 'in-progress' : 'queued';
-      let local = runs.find((r) => String(r.runId) === String(ghr.runId) && r.engine === engine);
+      const status = mapRunStatus(ghr.status, ghr.conclusion);
       // Link console-dispatched runs (dispatch API returns no run id): match by
-      // job_id in the run-name, else by dispatch time (within 5 min).
+      // run id, else job_id in the run-name, else by dispatch time (within 5 min).
+      // Shared with the GitHub webhook (see _lib/webhook.js#findLocalRun).
+      const match = findLocalRun(runs, engine, ghr);
+      let local = match.run;
       let linked = false;
-      if (!local) {
-        const ghStart = Date.parse(ghr.startedAt) || 0;
-        local = runs.find((r) => !r.runId && r.engine === engine && r.jobId
-            && String(ghr.displayTitle || '').includes(r.jobId))
-          || (ghr.event === 'workflow_dispatch' ? runs.find((r) => !r.runId && r.engine === engine && r.jobId
-            && Math.abs(ghStart - (Date.parse(r.startedAt) || 0)) < 5 * 60 * 1000) : null);
-        if (local) {
-          local.runId = ghr.runId; linked = true;
-          await updateRun(db, local.id, { runId: ghr.runId, githubUrl: ghr.githubUrl });
-          await updateJob(db, local.jobId, { runId: ghr.runId });
-        }
+      if (local && match.by !== 'run_id') {
+        local.runId = ghr.runId; linked = true;
+        await updateRun(db, local.id, { runId: ghr.runId, githubUrl: ghr.githubUrl });
+        await updateJob(db, local.jobId, { runId: ghr.runId });
       }
       let jobNeedsSync = false;
       if (local && local.jobId && ['completed', 'failed', 'cancelled'].includes(status)) {
@@ -139,8 +134,10 @@ export async function onRequestPost(context) {
         updated++;
       } else if (local.status !== status || linked || jobNeedsSync) {
         const prev = local.status;
+        // Keep a step-level reason already recorded by the webhook.
         const failureReason = status === 'failed'
-          ? `GitHub Actions run concluded with failure (${ghr.displayTitle || ghr.name})` : null;
+          ? (/^(Step|Job) “/.test(local.failureReason || '') ? local.failureReason
+            : `GitHub Actions run concluded with failure (${ghr.displayTitle || ghr.name})`) : null;
         await updateRun(db, local.id, {
           status, githubUrl: ghr.githubUrl, startedAt: ghr.startedAt, failureReason,
         });
@@ -184,31 +181,13 @@ export async function onRequestPost(context) {
 
         // Mode-1 fallback: primary GENUINELY failed (never on slowness), the
         // job has no upload anywhere (registry + evidence), and policy allows it.
-        if (status === 'failed' && engine === 'gemini'
-          && settings.orchestration.mode === 'primary_with_fallback'
-          && settings.orchestration.fallback !== 'never'
-          && settings.engines?.verticals?.enabled !== false) {
-          const job = local.jobId ? await getJob(db, local.jobId) : null;
-          const title = job?.title || ghr.displayTitle;
-          const dup = title && settings.publishing.dedupe ? await findDuplicate(db, title, job?.id) : null;
-          const uploaded = job?.youtubeId || job?.status === 'published';
-          if (!dup && title && !uploaded) {
-            try {
-              const vslug = settings.github.verticals.repo;
-              await dispatchWorkflow(token, {
-                ...splitRepo(vslug), workflowFile: settings.github.verticals.workflow,
-                ref: settings.github.branch || 'dypol-integration',
-                inputs: {
-                  phase: 'draft', topic: title, privacy: settings.publishing.visibility,
-                  job_id: job?.id || '', fallback_of: local.id,
-                },
-              });
-              fallbackDispatched++;
-              messages.push(`fallback: Verticals v3 dispatched for “${title}” (primary genuinely failed)`);
-              await addActivity(db, { icon: 'zap', tone: 'amber', title: 'Fallback engine dispatched', sub: title });
-            } catch (e) {
-              messages.push(`fallback dispatch failed: ${e.message}`);
-            }
+        if (status === 'failed') {
+          const fb = await maybeDispatchFallback({
+            db, token, settings, engine, local, displayTitle: ghr.displayTitle,
+          });
+          if (fb) {
+            if (fb.dispatched) fallbackDispatched++;
+            messages.push(fb.message);
           }
         }
       }

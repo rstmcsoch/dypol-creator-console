@@ -7,6 +7,7 @@ import {
   icon, esc, statusPill, enginePill, typePill, thumb, fmtDateTime, fmtAgo, progressBar,
   toast, openDrawer, closeDrawer, renderLogs, emptyState, confirmModal, openModal, closeModal, qcRow,
 } from '../ui.js';
+import { mountProgress } from '../progress.js';
 
 const STATUS_TABS = [
   ['', 'All'], ['queued', 'Queued'], ['generating,dispatched,running', 'Generating'],
@@ -93,6 +94,7 @@ function detailDrawer(j) {
       ${j.attempt > 1 ? `<span class="pill pill--outline">Attempt ${j.attempt}</span>` : ''}
       ${j.demo ? '<span class="pill pill--accent">Demo record</span>' : ''}
     </div>
+    ${j.demo ? '' : '<div id="job-progress" aria-live="polite"></div>'}
 
     <div>
       <div class="row" style="margin-bottom:6px">
@@ -153,6 +155,15 @@ function detailDrawer(j) {
     ${j.youtubeUrl ? `<a class="btn btn--ghost btn--sm" href="${esc(j.youtubeUrl)}" target="_blank" rel="noopener">${icon('external', 'icon--sm')} Open YouTube</a>` : ''}`;
 
   openDrawer({ title: 'Video Details', body, foot });
+  // Live step-by-step progress while the job runs (stops when done/closed).
+  mountProgress(document.getElementById('job-progress'), `/api/jobs/${encodeURIComponent(j.id)}/progress`, {
+    onDone: (p) => {
+      toast(p.jobStatus === 'failed' ? 'Run failed' : 'Run finished',
+        p.jobStatus === 'failed' ? (p.failingStep ? `Failed at step: ${p.failingStep}` : (p.error || '')) : `Status: ${p.jobStatus}`,
+        p.jobStatus === 'failed' ? 'bad' : 'ok');
+      refresh().catch(() => {});
+    },
+  });
   const credits = document.getElementById('visual-credits');
   if (credits) {
     fetch(`/api/jobs/${encodeURIComponent(j.id)}/media?kind=manifest`, { credentials: 'same-origin' })

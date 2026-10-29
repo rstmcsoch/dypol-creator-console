@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   parent_job_id TEXT,
   attempt       INTEGER DEFAULT 1,
   publish_blocked TEXT,
-  duplicate_of  TEXT
+  duplicate_of  TEXT,
+  current_step  TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
@@ -52,7 +53,11 @@ CREATE TABLE IF NOT EXISTS runs (
   github_url     TEXT,
   steps          TEXT DEFAULT '[]',
   logs           TEXT DEFAULT '[]',
-  artifacts      TEXT DEFAULT '[]'
+  artifacts      TEXT DEFAULT '[]',
+  conclusion     TEXT,
+  current_step   TEXT,
+  completed_at   TEXT,
+  updated_at     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC);
@@ -89,4 +94,39 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS locks (
   name       TEXT PRIMARY KEY,
   expires_at INTEGER NOT NULL
+);
+
+-- Live progress (GitHub webhooks) — see migrations/003.sql
+CREATE TABLE IF NOT EXISTS gh_jobs (
+  gh_job_id    TEXT PRIMARY KEY,
+  gh_run_id    TEXT NOT NULL,
+  repo         TEXT,
+  name         TEXT,
+  status       TEXT,
+  conclusion   TEXT,
+  html_url     TEXT,
+  started_at   TEXT,
+  completed_at TEXT,
+  updated_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_gh_jobs_run ON gh_jobs(gh_run_id);
+
+CREATE TABLE IF NOT EXISTS job_steps (
+  gh_run_id    TEXT NOT NULL,
+  gh_job_id    TEXT NOT NULL,
+  number       INTEGER NOT NULL,
+  name         TEXT,
+  status       TEXT,
+  conclusion   TEXT,
+  started_at   TEXT,
+  completed_at TEXT,
+  updated_at   TEXT,
+  PRIMARY KEY (gh_run_id, gh_job_id, number)
+);
+CREATE INDEX IF NOT EXISTS idx_job_steps_run ON job_steps(gh_run_id);
+
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  id          TEXT PRIMARY KEY,
+  event       TEXT,
+  received_at TEXT NOT NULL
 );

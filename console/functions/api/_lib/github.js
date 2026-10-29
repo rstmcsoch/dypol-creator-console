@@ -72,9 +72,13 @@ export async function getWorkflowRun(token, { owner, repo, runId }) {
   const r = await gh(token, `/repos/${owner}/${repo}/actions/runs/${runId}`);
   return {
     runId: String(r.id),
+    name: r.name,
+    event: r.event,
+    path: r.path,
     status: r.status,
     conclusion: r.conclusion,
     startedAt: r.created_at,
+    runStartedAt: r.run_started_at,
     updatedAt: r.updated_at,
     githubUrl: r.html_url,
     displayTitle: r.display_title,

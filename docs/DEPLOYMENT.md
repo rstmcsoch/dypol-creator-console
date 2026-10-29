@@ -66,6 +66,14 @@ npm run deploy                           # preflight + wrangler pages deploy .
 - [ ] Daily cap blocks the third upload (with cap=2).
 - [ ] Analytics page says “not connected” honestly (no invented numbers).
 
+### Live progress (GitHub webhooks)
+- Set Pages secret `GITHUB_WEBHOOK_SECRET` (Production), redeploy.
+- Add the webhook on both engine repos (see docs/SECRETS.md → GitHub webhooks)
+  and confirm the `ping` delivery returns 200.
+- D1 tables for progress (`gh_jobs`, `job_steps`, `webhook_deliveries`, new
+  `runs`/`jobs` columns) are created automatically on first use; to apply them
+  explicitly: `npx wrangler d1 execute dypol-console --remote --file=migrations/003.sql`.
+
 ## D. Custom domain (optional)
 
 Pages → *Custom domains* → add your domain (Cloudflare DNS handles TLS).

@@ -15,6 +15,7 @@ Set via dashboard → *dypol-creator-console* → Settings → Environment varia
 | `ADMIN_PASSWORD_HASH` | ✅ | Console login | `node console/scripts/hash-password.cjs 'your-strong-password'` → paste the printed `pbkdf2$…` string |
 | `SESSION_SECRET` | ✅ | HMAC key for session cookies | `openssl rand -hex 32` |
 | `GITHUB_TOKEN` | ✅ for live runs | workflow-dispatch / runs / cancel / re-run | Fine-grained PAT (below) |
+| `GITHUB_WEBHOOK_SECRET` | ✅ for live progress | verifies `X-Hub-Signature-256` on `POST /api/webhooks/github` | Random 32+ byte string; the SAME value is set on each engine repo's webhook. Never commit it. |
 | `GEMINI_API_KEY` | optional | engine health checks (engines use their own Actions secret) | AI Studio key |
 | `YOUTUBE_CLIENT_SECRET_B64` | for uploads | OAuth client secret (base64) | Google Cloud Console (below) |
 | `YOUTUBE_TOKEN_B64` | for uploads | OAuth user token JSON (base64) | produced by the OAuth flow (below) |
@@ -39,6 +40,17 @@ Personal access tokens) restricted to exactly your two engine forks:
 
 No org-wide scope, no admin, no delete permissions. Store it only as the
 Cloudflare Pages secret. **Do not** commit it. Rotate periodically.
+
+## GitHub webhooks — live progress
+
+Each engine repo (`rstmcsoch/gemini-youtube-automation`, `rstmcsoch/youtube-shorts-pipeline`)
+has a repository webhook → `https://dypol-creator-console.pages.dev/api/webhooks/github`,
+content type `application/json`, secret = `GITHUB_WEBHOOK_SECRET`, events:
+**Workflow runs** + **Workflow jobs**. The endpoint is exempt from the session
+cookie but rejects any delivery without a valid HMAC-SHA256 signature (401),
+ignores other repos/events (202) and de-duplicates by `X-GitHub-Delivery`.
+`POST /api/sync/github` remains the polling fallback. Rotating the secret:
+update the Pages secret, redeploy, then update both webhooks.
 
 ## GitHub Actions Secrets (per engine fork)
 

@@ -24,6 +24,7 @@ export function rowToJob(r) {
     attempt: r.attempt || 1,
     publishBlocked: r.publish_blocked,
     duplicateOf: parse(r.duplicate_of, null),
+    currentStep: r.current_step || null,
     demo: false,
   };
 }
@@ -34,6 +35,7 @@ export function rowToRun(r) {
     jobId: r.job_id, startedAt: r.started_at, durationSec: r.duration_sec,
     status: r.status, failureReason: r.failure_reason, githubUrl: r.github_url,
     steps: parse(r.steps, []), logs: parse(r.logs, []), artifacts: parse(r.artifacts, []),
+    conclusion: r.conclusion || null, currentStep: r.current_step || null, completedAt: r.completed_at || null,
     demo: false,
   };
 }
