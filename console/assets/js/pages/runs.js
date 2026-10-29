@@ -100,6 +100,7 @@ async function refresh() {
               <div class="row">
                 ${r.githubUrl ? `<a class="btn btn--ghost btn--sm" href="${esc(r.githubUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${icon('github', 'icon--sm')}</a>` : ''}
                 <button class="btn btn--ghost btn--sm" data-retry="${esc(r.id)}" ${r.status === 'failed' ? '' : 'disabled'} onclick="event.stopPropagation()">${icon('refresh', 'icon--sm')} Retry</button>
+                ${r.jobId && ['in-progress', 'queued'].includes(r.status) ? `<button class="btn btn--ghost btn--sm" data-cancel-job="${esc(r.jobId)}" onclick="event.stopPropagation()">${icon('x', 'icon--sm')} Cancel</button>` : ''}
               </div>
             </div>
           </div>`).join('')}
@@ -120,6 +121,15 @@ async function refresh() {
         runDrawer(full.run);
       } catch (err) { toast('Could not load run', err.message, 'bad'); }
     };
+  });
+  root.querySelectorAll('[data-cancel-job]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      try {
+        const res = await api.jobAction(b.dataset.cancelJob, 'cancel');
+        toast('Job cancelled', res.message, 'ok');
+        location.reload();
+      } catch (err) { toast('Cancel failed', err.message, 'bad'); }
+    });
   });
   root.querySelectorAll('[data-retry]').forEach((b) => {
     b.onclick = async () => {

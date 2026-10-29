@@ -41,7 +41,9 @@ export async function onRequestPost(context) {
   // Concurrency gate (server-side, configurable).
   const maxConcurrent = settings.orchestration.maxConcurrency ?? 1;
   const active = (await listJobs(db, {})).filter((j) =>
-    ['dispatched', 'running', 'generating', 'rendering', 'uploading'].includes(j.status));
+    ['dispatched', 'running', 'generating', 'rendering', 'uploading'].includes(j.status)
+    // Records with no update for 90+ min are stale (lost dispatch) — never block on them.
+    && (Date.now() - (Date.parse(j.updatedAt || j.createdAt) || 0)) < 90 * 60 * 1000);
   if (active.length >= maxConcurrent) {
     return json(null, 409, {
       error: `Concurrency limit reached (${maxConcurrent} active job(s)). Wait for a running job to finish or raise “Maximum concurrency” in Settings.`,
@@ -77,6 +79,10 @@ export async function onRequestPost(context) {
     language: settings.defaults.language || 'en',
     review_required: settings.publishing.reviewRequired ? '1' : '0',
     auto_publish: settings.publishing.autoPublish ? '1' : '0',
+    ...(engine === 'verticals' ? {
+      niche: String(body.niche || settings.defaults.niche || 'tech'),
+      ...(body.context ? { context: String(body.context).slice(0, 2000) } : {}),
+    } : {}),
     ...(body.titleOverride ? { title_override: body.titleOverride } : {}),
     ...(body.descriptionOverride ? { description_override: body.descriptionOverride } : {}),
   };

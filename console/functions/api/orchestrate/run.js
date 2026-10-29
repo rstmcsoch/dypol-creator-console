@@ -38,7 +38,9 @@ export async function onRequestPost(context) {
   // Concurrency gate (counts across both engines).
   const maxConcurrent = settings.orchestration.maxConcurrency ?? 1;
   const active = (await listJobs(db, {})).filter((j) =>
-    ['dispatched', 'running', 'generating', 'rendering', 'uploading'].includes(j.status));
+    ['dispatched', 'running', 'generating', 'rendering', 'uploading'].includes(j.status)
+    // Records with no update for 90+ min are stale (lost dispatch) — never block on them.
+    && (Date.now() - (Date.parse(j.updatedAt || j.createdAt) || 0)) < 90 * 60 * 1000);
   const wanted = mode === 'draft_both' ? 2 : 1;
   if (active.length + wanted > Math.max(maxConcurrent, wanted)) {
     return json(null, 409, {

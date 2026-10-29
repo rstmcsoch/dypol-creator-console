@@ -40,6 +40,10 @@ function runModal(engine) {
         <label class="field__label" for="p-topic">Topic (optional)</label>
         <input class="input" id="p-topic" placeholder="Leave empty for automatic topic selection" />
       </div>
+      ${engine.id === 'verticals' ? `<div class="field">
+        <label class="field__label" for="p-context">Context / facts (optional)</label>
+        <textarea class="input" id="p-context" rows="3" placeholder="Key facts, date, source names the script should use"></textarea>
+      </div>` : ''}
       <div class="field">
         <label class="field__label">Execution phase</label>
         <div class="row row--wrap" id="p-phase" style="gap:8px">
@@ -67,7 +71,8 @@ function runModal(engine) {
     const btn = document.getElementById('m-go');
     btn.disabled = true;
     try {
-      const res = await api.engineRun(engine.id, { topic: topic || undefined, phase });
+      const ctxEl = document.getElementById('p-context');
+      const res = await api.engineRun(engine.id, { topic: topic || undefined, phase, context: ctxEl?.value.trim() || undefined });
       closeModal();
       toast('Workflow dispatched', res.message || 'GitHub Actions run queued.', 'ok');
       await refresh();

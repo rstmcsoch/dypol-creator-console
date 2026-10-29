@@ -25,6 +25,8 @@ import {
  *    nothing was uploaded, and the fallback policy allows it,
  *  · records error categories and retryability on failures.
  */
+const STALE_MS = 90 * 60 * 1000;
+
 export async function onRequestPost(context) {
   const db = context.env.DB;
   const token = context.env.GITHUB_TOKEN;
@@ -98,11 +100,31 @@ export async function onRequestPost(context) {
     }
 
     for (const ghr of ghRuns) {
-      let local = runs.find((r) => String(r.runId) === String(ghr.runId) && r.engine === engine);
       const status = ghr.conclusion === 'success' ? 'completed'
         : ghr.conclusion === 'failure' ? 'failed'
         : ghr.conclusion === 'cancelled' ? 'cancelled'
         : ghr.status === 'in_progress' ? 'in-progress' : 'queued';
+      let local = runs.find((r) => String(r.runId) === String(ghr.runId) && r.engine === engine);
+      // Link console-dispatched runs (dispatch API returns no run id): match by
+      // job_id in the run-name, else by dispatch time (within 5 min).
+      let linked = false;
+      if (!local) {
+        const ghStart = Date.parse(ghr.startedAt) || 0;
+        local = runs.find((r) => !r.runId && r.engine === engine && r.jobId
+            && String(ghr.displayTitle || '').includes(r.jobId))
+          || (ghr.event === 'workflow_dispatch' ? runs.find((r) => !r.runId && r.engine === engine && r.jobId
+            && Math.abs(ghStart - (Date.parse(r.startedAt) || 0)) < 5 * 60 * 1000) : null);
+        if (local) {
+          local.runId = ghr.runId; linked = true;
+          await updateRun(db, local.id, { runId: ghr.runId, githubUrl: ghr.githubUrl });
+          await updateJob(db, local.jobId, { runId: ghr.runId });
+        }
+      }
+      let jobNeedsSync = false;
+      if (local && local.jobId && ['completed', 'failed', 'cancelled'].includes(status)) {
+        const j = await getJob(db, local.jobId);
+        jobNeedsSync = !!j && ['dispatched', 'running', 'generating', 'rendering'].includes(j.status);
+      }
 
       if (!local) {
         local = {
@@ -115,7 +137,7 @@ export async function onRequestPost(context) {
         await insertRun(db, local);
         runs.push(local);
         updated++;
-      } else if (local.status !== status) {
+      } else if (local.status !== status || linked || jobNeedsSync) {
         const prev = local.status;
         const failureReason = status === 'failed'
           ? `GitHub Actions run concluded with failure (${ghr.displayTitle || ghr.name})` : null;
@@ -203,6 +225,28 @@ export async function onRequestPost(context) {
       }
     }
   }
+
+  /* ---- 3. Stale cleanup: active jobs/runs with no GitHub run after 90 min ---- */
+  try {
+    const cutoff = Date.now() - STALE_MS;
+    for (const r of await listRuns(db)) {
+      if (!r.runId && ['in-progress', 'queued'].includes(r.status) && (Date.parse(r.startedAt) || 0) < cutoff) {
+        await updateRun(db, r.id, { status: 'failed', failureReason: 'Stale: no matching GitHub Actions run found' });
+        updated++;
+      }
+    }
+    for (const j of await listJobs(db, {})) {
+      if (['dispatched', 'running', 'generating', 'rendering'].includes(j.status)
+        && (Date.parse(j.updatedAt || j.createdAt) || 0) < cutoff) {
+        await updateJob(db, j.id, {
+          status: 'failed', stage: 'Stale', error: 'Stale: no GitHub Actions progress for 90+ minutes',
+          errorCategory: 'stale', errorRetryable: true,
+        });
+        messages.push(`stale job closed: ${j.title}`);
+        updated++;
+      }
+    }
+  } catch (err) { messages.push(`stale cleanup failed — ${err.message}`); }
 
   return json(null, 200, {
     ok: true,
