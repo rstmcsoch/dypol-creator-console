@@ -96,7 +96,9 @@ export async function onRequestPost(context) {
           privacy: settings.publishing.visibility,
           title_override: job.title,
           description_override: (job.description || '').slice(0, 480),
-          tags_override: (job.tags || []).join(','),
+          // Engine A's workflow has no tags_override input (GitHub rejects
+          // unexpected inputs), so only Engine B receives it.
+          ...(job.engine === 'gemini' ? {} : { tags_override: (job.tags || []).join(',') }),
           // Policy echo — workflows enforce it too (defence in depth).
           review_required: settings.publishing.reviewRequired ? '1' : '0',
           auto_publish: settings.publishing.autoPublish ? '1' : '0',
