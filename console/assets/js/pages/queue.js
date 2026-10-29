@@ -74,8 +74,18 @@ function detailDrawer(j) {
     regenerate: j.status === 'published' ? 'Published videos cannot be regenerated — create a new topic instead.' : '',
     edit: j.status === 'published' ? 'Published videos cannot be edited.' : '',
   };
+  const hasRun = !!j.runId && !j.demo;
   const body = `
-    ${thumb(j, true)}
+    ${hasRun ? `<div class="media-review">
+      <video controls preload="metadata" playsinline style="width:100%;max-height:60vh;border-radius:12px;background:#000"
+        src="/api/jobs/${encodeURIComponent(j.id)}/media?kind=video"></video>
+      <div class="row row--wrap" style="gap:8px;margin-top:8px">
+        <a class="btn btn--ghost btn--sm" href="/api/jobs/${encodeURIComponent(j.id)}/media?kind=video" target="_blank" rel="noopener">${icon('external', 'icon--sm')} Open video</a>
+        ${j.engine === 'gemini' ? `<a class="btn btn--ghost btn--sm" href="/api/jobs/${encodeURIComponent(j.id)}/media?kind=short" target="_blank" rel="noopener">${icon('external', 'icon--sm')} Open Short</a>` : ''}
+        <a class="btn btn--ghost btn--sm" href="/api/jobs/${encodeURIComponent(j.id)}/media?kind=thumb" target="_blank" rel="noopener">${icon('external', 'icon--sm')} Thumbnail</a>
+      </div>
+      <div id="visual-credits" class="small muted" style="margin-top:8px">Loading visual sources…</div>
+    </div>` : thumb(j, true)}
     <div class="row row--wrap" style="gap:7px">
       <span class="pill pill--outline">${esc(j.format === 'short' ? 'Short · 9:16' : 'Long-form · 16:9')}</span>
       ${enginePill(j.engine)}
@@ -143,6 +153,23 @@ function detailDrawer(j) {
     ${j.youtubeUrl ? `<a class="btn btn--ghost btn--sm" href="${esc(j.youtubeUrl)}" target="_blank" rel="noopener">${icon('external', 'icon--sm')} Open YouTube</a>` : ''}`;
 
   openDrawer({ title: 'Video Details', body, foot });
+  const credits = document.getElementById('visual-credits');
+  if (credits) {
+    fetch(`/api/jobs/${encodeURIComponent(j.id)}/media?kind=manifest`, { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const rows = [];
+        for (const m of (d?.manifests || [])) {
+          const items = Array.isArray(m.data) ? m.data : (m.data?.segments || m.data?.assets || m.data?.items || []);
+          for (const it of items) {
+            const a = it.asset || it;
+            rows.push(`<li>${esc(String(it.segment ?? ''))} · ${esc(a.provider || 'unknown')} · ${esc(a.license || '—')}${it.review_required ? ' · <strong>review</strong>' : ''}${a.source_url && !/api\.cloudflare/.test(a.source_url) ? ` · <a href="${esc(a.source_url)}" target="_blank" rel="noopener">source</a>` : ''}</li>`);
+          }
+        }
+        credits.innerHTML = rows.length ? `<strong>Visual sources</strong><ul style="margin:4px 0 0 16px">${rows.slice(0, 40).join('')}</ul>` : 'No visual manifest in this run.';
+      })
+      .catch(() => { credits.textContent = 'Visual sources unavailable.'; });
+  }
 
   document.getElementById('btn-edit-meta')?.addEventListener('click', () => {
     openModal({

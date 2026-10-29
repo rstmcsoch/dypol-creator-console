@@ -60,3 +60,30 @@ export async function extractFirstEntry(bytes, suffix = '.json') {
     return null;
   }
 }
+
+/** List entry names in a ZIP (central directory only). */
+export function listEntries(bytes) {
+  try {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const eocd = findEocd(view);
+    if (eocd < 0) return [];
+    const count = view.getUint16(eocd + 10, true);
+    let p = view.getUint32(eocd + 16, true);
+    const names = [];
+    for (let n = 0; n < count && p + 46 <= bytes.byteLength; n++) {
+      if (view.getUint32(p, true) !== CDIR_SIG) break;
+      const nameLen = view.getUint16(p + 28, true);
+      const extraLen = view.getUint16(p + 30, true);
+      const commentLen = view.getUint16(p + 32, true);
+      names.push(new TextDecoder().decode(bytes.subarray(p + 46, p + 46 + nameLen)));
+      p += 46 + nameLen + extraLen + commentLen;
+    }
+    return names;
+  } catch { return []; }
+}
+
+/** Extract one named entry ({ name, bytes }) or null. */
+export async function extractNamed(bytes, wanted) {
+  const r = await extractFirstEntry(bytes, wanted);
+  return r && r.name === wanted ? r : null;
+}

@@ -96,7 +96,9 @@ export async function listRunJobs(token, { owner, repo, runId }) {
 export async function listRunArtifacts(token, { owner, repo, runId }) {
   const data = await gh(token, `/repos/${owner}/${repo}/actions/runs/${runId}/artifacts`);
   return (data.artifacts || []).map((a) => ({
+    id: a.id,
     name: a.name,
+    sizeInBytes: a.size_in_bytes || 0,
     size: `${Math.round((a.size_in_bytes || 0) / 1e6)} MB`,
     expired: a.expired,
     downloadUrl: a.archive_download_url,
