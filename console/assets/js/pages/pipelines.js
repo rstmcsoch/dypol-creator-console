@@ -1,7 +1,7 @@
 /* Pipelines — per-engine stage management (stages reflect each engine's real implementation) */
 import { api } from '../api.js';
 import {
-  icon, esc, statusPill, progressBar, toast, openModal, closeModal, fmtDateTime,
+  icon, esc, statusPill, friendlyStage, progressBar, toast, openModal, closeModal, fmtDateTime,
   fmtDuration, confirmModal, renderLogs,
 } from '../ui.js';
 
@@ -26,8 +26,8 @@ function stageTrack(stages = []) {
     return `<div class="stage ${cls}" title="${esc(STAGE_HELP[state] || state)}">
       <div class="stage__line"></div>
       <div class="stage__node">${icon(ic, 'icon--sm')}</div>
-      <div class="stage__label">${esc(s.name)}</div>
-      <div class="stage__state">${esc(s.label || state)}</div>
+      <div class="stage__label">${esc(friendlyStage(s.name))}</div>
+      <div class="stage__state">${esc(friendlyStage(s.label || state))}</div>
     </div>`;
   }).join('')}</div>`;
 }
@@ -106,8 +106,8 @@ function enginePanel(e) {
       </div>
       <div class="right">
         <button class="btn btn--primary btn--sm" data-action="run" data-id="${esc(e.id)}"
-          ${e.connectionState === 'disabled' ? 'disabled title="Enable this engine in Settings first"' : ''}>${icon('run', 'icon--sm')} Start run</button>
-        <button class="btn btn--secondary btn--sm" data-action="cancel" data-id="${esc(e.id)}" ${e.running ? '' : 'disabled title="No running job to cancel"'}>${icon('x', 'icon--sm')} Cancel</button>
+          ${e.connectionState === 'disabled' ? 'aria-disabled="true" data-why="Enable this engine in Settings first"' : ''}>${icon('run', 'icon--sm')} Start run</button>
+        <button class="btn btn--secondary btn--sm" data-action="cancel" data-id="${esc(e.id)}" ${e.running ? '' : 'aria-disabled="true" data-why="No running job to cancel"'}>${icon('x', 'icon--sm')} Cancel</button>
       </div>
     </div>
     ${e.connectionState === 'error' ? `<div class="card__body" style="padding-top:0"><div class="callout callout--warn">${icon('alert')}<div>${esc(e.connectionDetail || 'GitHub unreachable')}</div></div></div>` : ''}
@@ -132,7 +132,7 @@ function enginePanel(e) {
           <div class="row row--wrap" style="margin-top:12px">
             ${e.lastRun?.githubUrl ? `<a class="btn btn--secondary btn--sm" href="${esc(e.lastRun.githubUrl)}" target="_blank" rel="noopener">${icon('github', 'icon--sm')} GitHub Actions run</a>` : ''}
             <a class="btn btn--ghost btn--sm" href="#/runs">${icon('doc', 'icon--sm')} Logs</a>
-            <button class="btn btn--ghost btn--sm" data-action="retry" data-id="${esc(e.id)}" ${e.lastRun?.status === 'failed' ? '' : 'disabled title="Only a failed run can be retried"'}>${icon('refresh', 'icon--sm')} Retry failed run</button>
+            <button class="btn btn--ghost btn--sm" data-action="retry" data-id="${esc(e.id)}" ${e.lastRun?.status === 'failed' ? '' : 'aria-disabled="true" data-why="Only a failed run can be retried"'}>${icon('refresh', 'icon--sm')} Retry failed run</button>
           </div>
         </div>
         <div class="card card--pad" style="background:var(--bg-sunken)">
@@ -148,7 +148,7 @@ function enginePanel(e) {
             <dt>Publishing</dt><dd>${esc(e.publishingMode || 'review-required')}</dd>
             <dt>Draft phase</dt><dd>${e.supports?.draftPhase ? 'Supported' : 'Unsupported'}</dd>
             <dt>Cancellation</dt><dd>${e.supports?.cancellation ? 'Supported (GitHub API)' : 'Not supported mid-run'}</dd>
-            <dt>Artifacts</dt><dd>${(e.artifacts || []).length ? e.artifacts.map((a) => esc(a.name)).join(', ') : 'None from last run'}</dd>
+            <dt>Artifacts</dt><dd>${(e.artifacts || []).length ? e.artifacts.map((a) => esc(a.name)).join(', ') : 'Listed in Run History after a sync'}</dd>
           </dl>
         </div>
       </div>

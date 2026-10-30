@@ -206,9 +206,12 @@ async function refresh() {
             ${[
               ['Backend mode', h.mode === 'demo' ? 'warn' : 'ok', h.mode === 'demo' ? 'Demo (local)' : 'Live'],
               ['Job registry (D1)', h.db === 'ok' ? 'ok' : 'off', h.db === 'ok' ? 'Connected' : 'Not connected'],
-              ['GitHub token secret', h.githubToken ? 'ok' : 'off', h.githubToken ? 'Configured' : 'Missing'],
-              ['Gemini API key secret', h.geminiKey ? 'ok' : 'off', h.geminiKey ? 'Configured' : 'Missing'],
-              ['YouTube OAuth', h.youtubeOAuth ? 'warn' : 'off', h.youtubeOAuth ? 'Configured · untested' : 'Missing'],
+              ['GitHub token', !h.githubToken ? 'off' : h.githubTokenValid ? (expSoon(h.githubTokenExpiresAt) ? 'warn' : 'ok') : 'off',
+                !h.githubToken ? 'Missing' : h.githubTokenValid ? (h.githubTokenExpiresAt ? `Valid · expires ${fmtDay(h.githubTokenExpiresAt)}` : 'Valid') : (h.githubTokenMessage || 'Rejected')],
+              ['Webhook secret', h.webhookSecret ? 'ok' : 'off', h.webhookSecret ? 'Configured' : 'Missing'],
+              ['Gemini engine credentials', ev(h.engines?.gemini) ? 'ok' : 'warn', ev(h.engines?.gemini) ? `Verified by last successful run · ${fmtDay(ev(h.engines?.gemini))}` : 'Held by engine · not yet proven'],
+              ['Verticals engine credentials', ev(h.engines?.verticals) ? 'ok' : 'warn', ev(h.engines?.verticals) ? `Verified by last successful run · ${fmtDay(ev(h.engines?.verticals))}` : 'Held by engine · not yet proven'],
+              ['YouTube upload (OAuth)', h.youtubeLastUpload ? 'ok' : 'warn', h.youtubeLastUpload ? `Verified by last upload · ${fmtDay(h.youtubeLastUpload)}` : 'Held by engine · proven at first upload'],
               ['YouTube Analytics', h.youtubeAnalytics ? 'ok' : 'off', h.youtubeAnalytics ? 'Connected' : 'Not connected'],
               ['Publishing lock', s.publishing?.publishLock ? 'ok' : 'off', s.publishing?.publishLock ? 'Enabled (by setting)' : 'Disabled (by setting)'],
             ].map(([name, state, label]) => `
@@ -226,10 +229,10 @@ async function refresh() {
           </div>
           <div class="card__body stack" style="gap:10px">
             <div class="row">${statusPill(yt.state)}</div>
-            ${yt.state === 'configured-untested' ? `
-              <div class="callout callout--warn">${icon('alert')}<div><strong>Credentials configured, authorisation untested.</strong> A configured credential is not proof of validity — the console tests it at the next upload. Keep visibility on <span class="mono">private</span> for the first test.</div></div>`
+            ${yt.state === 'verified-by-upload' ? `
+              <div class="callout">${icon('check')}<div><strong>Uploads work.</strong> The YouTube sign-in lives in the engine repositories (not in the console); the last successful upload on ${esc(fmtDay(yt.lastUpload))} proves it.</div></div>`
             : `
-              <div class="callout callout--warn">${icon('alert')}<div><strong>OAuth not configured.</strong> Manual setup required: see <span class="mono">docs/SECRETS.md</span> (Google Cloud Console → OAuth client → first token → Pages secrets).</div></div>`}
+              <div class="callout">${icon('info')}<div><strong>Held by the engines.</strong> YouTube sign-in is stored as engine repository secrets, so the console cannot test it directly — the first successful upload proves it.</div></div>`}
             <dl class="kv">
               <dt>Channel</dt><dd>${esc(h.channelName || '—')}</dd>
               <dt>Upload visibility</dt><dd>${esc(s.publishing?.visibility || 'private')}</dd>
@@ -337,6 +340,10 @@ async function refresh() {
   root.querySelector('#btn-test-gemini').onclick = () => testTarget('gemini', 'Gemini readiness');
   root.querySelector('#btn-test-dedupe').onclick = () => testTarget('dedupe', 'Duplicate-check self test');
 }
+
+const fmtDay = (t) => { const d = new Date(t); return Number.isNaN(d.getTime()) ? String(t || '') : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }); };
+const expSoon = (t) => !!t && Date.parse(t) - Date.now() < 14 * 864e5;
+const ev = (e) => (e ? (e.lastUpload || e.lastSuccessfulRun) : null);
 
 export async function renderSettings() {
   await refresh();

@@ -118,13 +118,14 @@ export function statusPill(status) {
     published: ['green', 'Published'], uploaded: ['green', 'Uploaded'], completed: ['green', 'Completed'],
     approved: ['teal', 'Approved'], ok: ['green', 'OK'], passed: ['green', 'Passed'],
     generating: ['blue', 'Generating'], rendering: ['blue', 'Rendering'], 'in-progress': ['blue', 'In Progress'],
-    running: ['blue', 'Running'], dispatched: ['blue', 'Dispatched'], uploading: ['violet', 'Uploading'],
+    running: ['blue', 'In production'], dispatched: ['blue', 'Starting'], uploading: ['violet', 'Uploading'],
     processing: ['blue', 'Processing'],
     scheduled: ['gray', 'Scheduled'], queued: ['gray', 'Queued'], draft: ['gray', 'Draft'],
     'needs-review': ['amber', 'Needs review'], 'awaiting-review': ['amber', 'Awaiting review'],
     blocked: ['amber', 'Blocked'], duplicate: ['amber', 'Duplicate'], superseded: ['gray', 'Superseded'],
     failed: ['red', 'Failed'], error: ['red', 'Error'], cancelled: ['gray', 'Cancelled'],
-    rejected: ['gray', 'Rejected'],
+    rejected: ['gray', 'Rejected'], publish_failed: ['red', 'Upload failed'],
+    'verified-by-upload': ['green', 'Verified by last upload'], 'held-by-engine': ['gray', 'Held by engine'],
     'not-configured': ['gray', 'Not configured'], unsupported: ['gray', 'Unsupported'],
     paused: ['amber', 'Paused'], connected: ['green', 'Connected'], disconnected: ['red', 'Disconnected'],
     'demo-unverified': ['amber', 'Demo · unverified'], disabled: ['gray', 'Disabled'],
@@ -341,3 +342,38 @@ export const renderLogs = (logs = []) => {
     return `<div class="log-line ${l.failed ? 'log-fail' : ''}"><span class="log-ts">${esc(l.ts || '')}</span> <span class="${cls}">${esc(l.msg)}</span></div>`;
   }).join('')}</div>`;
 };
+
+
+/* ---------------- Plain-language helpers (no raw infra strings) ---------------- */
+export const FAILURE_LABELS = {
+  llm_unavailable: 'AI model unavailable (temporary)', content_gate: 'Blocked by the name check',
+  asset: 'Visuals / voice asset problem', render: 'Video render failed', publish: 'YouTube upload failed',
+  unknown: 'Unclassified failure', dispatch: 'Engine refused the request', stale: 'Stopped responding',
+  config: 'Missing configuration', permission: 'Permission denied', quota: 'Quota exceeded',
+  provider: 'AI provider error', timeout: 'Timed out', upload: 'Upload rejected', oauth: 'YouTube sign-in problem',
+};
+export const failureLabel = (c) => FAILURE_LABELS[c] || (c ? String(c).replaceAll('_', ' ') : '');
+
+const STAGE_TEXT = [
+  [/^workflow_dispatch sent$/i, 'Sent to engine'],
+  [/^Running in GitHub Actions$/i, 'Working on it'],
+  [/^Queued in GitHub Actions$/i, 'Waiting to start'],
+  [/^Running: (.+)$/i, 'Working — $1'],
+  [/^workflow_dispatch failed$/i, 'Could not start'],
+  [/^Approved — awaiting publish window$/i, 'Approved'],
+  [/^Failed: (.+)$/i, 'Failed at “$1”'],
+  [/B-roll nano-banana/gi, 'Visuals'],
+  [/workflow_dispatch/gi, 'start request'],
+];
+/** Human-friendly stage text for a raw stage string. */
+export function friendlyStage(stage) {
+  let s = String(stage || '');
+  for (const [re, to] of STAGE_TEXT) s = s.replace(re, to);
+  return s;
+}
+
+/**
+ * Touch-friendly disabled state: elements render with aria-disabled + a
+ * data-why reason (instead of a hover-only title). A tap shows the reason.
+ */
+export const disabledAttr = (why) => (why ? `aria-disabled="true" data-why="${esc(why)}"` : '');

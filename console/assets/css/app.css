@@ -822,3 +822,11 @@ svg.icon--lg { width: 22px; height: 22px; }
   .sidebar, .topbar, .toasts, .drawer, .scrim { display: none !important; }
   .main { margin-left: 0; }
 }
+
+/* Touch-friendly disabled controls (tap shows the reason) */
+[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+.why-list { margin: 6px 0 0; padding-left: 16px; font-size: 12px; color: var(--muted, #6b7280); }
+.why-list li { margin: 2px 0; }
+.log-tail { max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 11px;
+  background: rgba(0,0,0,.04); border-radius: 8px; padding: 8px; margin-top: 6px; }
+.yt-links { display: flex; flex-wrap: wrap; gap: 8px; }

@@ -4,7 +4,7 @@
    Configure / Refresh all wired to real backend actions. */
 import { api } from '../api.js';
 import {
-  icon, esc, statCard, statusPill, enginePill, typePill, thumb, fmtDateTime,
+  icon, esc, statCard, friendlyStage, statusPill, enginePill, typePill, thumb, fmtDateTime,
   fmtAgo, fmtNum, progressBar, toast, openModal, closeModal, emptyState,
 } from '../ui.js';
 
@@ -51,12 +51,12 @@ function engineCard(e) {
       <dt>Workflow</dt><dd class="mono">${esc(e.workflow)}</dd>
       <dt>Last run</dt><dd>${e.lastRun ? `${esc(fmtDateTime(e.lastRun.startedAt || e.lastRun))} · ${statusPill(e.lastRunStatus || 'completed')}` : '<span class="muted">No runs yet</span>'}</dd>
       <dt>Last success</dt><dd>${e.lastSuccess ? esc(fmtDateTime(e.lastSuccess)) : '<span class="muted">—</span>'}</dd>
-      <dt>Current stage</dt><dd>${e.stage ? esc(e.stage) : '<span class="muted">Idle</span>'}</dd>
+      <dt>Current stage</dt><dd>${e.stage ? esc(friendlyStage(e.stage)) : '<span class="muted">Idle</span>'}</dd>
       ${e.latestError ? `<dt>Latest error</dt><dd style="color:var(--red)">${esc(e.latestError)}</dd>` : ''}
     </div>
     <div class="row row--wrap" style="margin-top:auto">
       <button class="btn btn--primary btn--sm" data-action="run-engine" data-engine="${esc(e.id)}"
-        ${e.connectionState === 'disabled' ? 'disabled title="Enable this engine in Settings first"' : ''}>${icon('run', 'icon--sm')} Run now</button>
+        ${e.connectionState === 'disabled' ? 'aria-disabled="true" data-why="Enable this engine in Settings first"' : ''}>${icon('run', 'icon--sm')} Run now</button>
       <a class="btn btn--secondary btn--sm" href="#/runs">${icon('history', 'icon--sm')} Run history</a>
       <a class="btn btn--ghost btn--sm" href="#/pipelines?engine=${esc(e.id)}">${icon('gear', 'icon--sm')} Configure</a>
     </div>
@@ -178,7 +178,7 @@ async function refresh() {
                   <div class="cell-sub">${typePill(v.format)} · ${esc(fmtDateTime(v.updatedAt))}${v.demo ? ' · <span class="pill pill--accent">DEMO</span>' : ''}</div>
                 </div>
                 <div data-col="Engine">${enginePill(v.engine)}</div>
-                <div data-col="Stage"><span class="small muted truncate">${esc(v.stage || '—')}</span></div>
+                <div data-col="Stage"><span class="small muted truncate">${esc(friendlyStage(v.stage) || '—')}</span></div>
                 <div data-col="Status">${statusPill(v.status)}</div>
                 <div class="row" style="justify-content:flex-end">
                   <button class="icon-btn icon-btn--bare" aria-label="Open details">${icon('chevronR', 'icon--sm')}</button>

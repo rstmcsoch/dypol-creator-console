@@ -6,14 +6,31 @@ import { api } from '../api.js';
 import {
   icon, esc, statusPill, enginePill, typePill, thumb, fmtDateTime, fmtAgo, progressBar,
   toast, openDrawer, closeDrawer, renderLogs, emptyState, confirmModal, openModal, closeModal, qcRow,
+  friendlyStage, failureLabel, disabledAttr,
 } from '../ui.js';
 import { mountProgress } from '../progress.js';
 
+// Every job state belongs to exactly one chip, so the chips add up to "All".
 const STATUS_TABS = [
-  ['', 'All'], ['queued', 'Queued'], ['generating,dispatched,running', 'Generating'],
-  ['rendering', 'Rendering'], ['needs-review', 'Awaiting Review'], ['approved', 'Approved'],
-  ['scheduled', 'Scheduled'], ['uploading', 'Uploading'], ['published', 'Published'], ['failed', 'Failed'],
+  ['', 'All'], ['queued', 'Queued'], ['dispatched,running,generating,rendering', 'In production'],
+  ['needs-review', 'Awaiting review'], ['approved,scheduled', 'Approved'], ['uploading', 'Uploading'],
+  ['published', 'Published'], ['failed', 'Failed'], ['publish_failed', 'Upload failed'],
+  ['rejected', 'Rejected'], ['superseded', 'Redone'], ['cancelled', 'Cancelled'],
 ];
+const REJECTABLE = ['needs-review', 'awaiting-review', 'approved', 'scheduled', 'failed', 'publish_failed', 'queued'];
+
+function chipCount(counts, key) {
+  if (key === '') return counts.all ?? 0;
+  const by = counts.byStatus || counts;
+  return key.split(',').reduce((n, s) => n + Number(by[s] || 0) + (s === 'needs-review' ? Number(by['awaiting-review'] || 0) : 0), 0);
+}
+
+function videoLinks(j) {
+  const vids = (j.videos && j.videos.length) ? j.videos
+    : (j.youtubeUrl ? [{ kind: j.format === 'short' ? 'short' : 'long', youtube_url: j.youtubeUrl, youtube_id: j.youtubeId }] : []);
+  const label = (k) => (k === 'short' ? 'YouTube Short' : k === 'long' ? 'Long video' : 'Video');
+  return vids.map((v) => `<a class="btn btn--ghost btn--sm" href="${esc(v.youtube_url || `https://youtu.be/${v.youtube_id}`)}" target="_blank" rel="noopener">${icon('youtube', 'icon--sm')} ${esc(label(v.kind))}</a>`).join('');
+}
 
 const NICHES = ['general', 'tech', 'science', 'education', 'finance', 'gaming', 'motivation'];
 
@@ -31,8 +48,29 @@ function filterQuery() {
   return `?${p.toString()}`;
 }
 
+const friendlyStatus = (s) => ({ publish_failed: 'failed-upload', 'needs-review': 'awaiting-review' }[s] || s);
+
+/** Modal with a textarea; resolves to the text, '' (optional) or null (cancel). */
+function askText(title, help, placeholder, okLabel, optional = false) {
+  return new Promise((resolve) => {
+    openModal({
+      title,
+      body: `<div class="field"><label class="field__label" for="ask-text">${esc(help)}</label>
+        <textarea class="textarea" id="ask-text" maxlength="2000" placeholder="${esc(optional ? '' : placeholder)}">${esc(optional ? placeholder : '')}</textarea></div>`,
+      foot: `<button class="btn btn--secondary" id="ask-cancel">Cancel</button>
+             <button class="btn btn--primary" id="ask-ok">${esc(okLabel)}</button>`,
+    });
+    document.getElementById('ask-cancel').onclick = () => { closeModal(); resolve(null); };
+    document.getElementById('ask-ok').onclick = () => {
+      const v = document.getElementById('ask-text').value.trim();
+      if (!optional && v.length < 3) { toast('Add a short reason', 'A few words are enough.', 'warn'); return; }
+      closeModal(); resolve(v);
+    };
+  });
+}
+
 function jobRow(j) {
-  const err = j.status === 'failed' && j.error;
+  const err = ['failed', 'publish_failed'].includes(j.status) && j.error;
   return `
   <div class="table__row is-clickable ${view.selected === j.id ? 'is-selected' : ''}" role="row" data-job="${esc(j.id)}"
        style="grid-template-columns:28px 76px minmax(0,2.2fr) 1fr .9fr 1.2fr 1.05fr 1.1fr">
@@ -44,17 +82,18 @@ function jobRow(j) {
       <div class="row" style="gap:5px;margin-top:4px;flex-wrap:wrap">
         ${(j.tags || []).slice(0, 3).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}
         ${(j.tags || []).length > 3 ? `<span class="tag">+${j.tags.length - 3}</span>` : ''}
-        ${j.attempt > 1 ? `<span class="tag" title="Linked regeneration of an earlier attempt">attempt ${j.attempt}</span>` : ''}
+        ${j.attempt > 1 ? `<span class="tag">redo #${j.attempt}</span>` : ''}
         ${j.demo ? '<span class="pill pill--accent">DEMO</span>' : ''}
       </div>
     </div>
     <div data-col="Engine">${enginePill(j.engine)}<div class="cell-sub" style="margin-top:3px">${typePill(j.format)}</div></div>
     <div data-col="Progress">
       <div style="width:100%">${progressBar(j.progress ?? (j.status === 'published' ? 100 : j.status === 'queued' ? 0 : null), j.status === 'failed' ? 'red' : j.engine === 'verticals' ? 'blue' : '')}</div>
-      <div class="cell-sub">${esc(j.stage || '—')}</div>
+      <div class="cell-sub">${esc(friendlyStage(j.stage) || '—')}</div>
     </div>
     <div data-col="Status">${statusPill(j.status)}
-      ${err ? `<div class="cell-sub" style="color:var(--red)">${esc(j.errorCategory ? `${j.errorCategory}: ` : '')}${esc(String(j.error).slice(0, 48))}</div>` : ''}
+      ${err ? `<div class="cell-sub" style="color:var(--red)">${esc(failureLabel(j.errorCategory) || String(j.error).slice(0, 60))}</div>` : ''}
+      ${j.status === 'published' && (j.videos?.length || j.youtubeUrl) ? `<div class="cell-sub">${(j.videos?.length || 1)} video${(j.videos?.length || 1) > 1 ? 's' : ''} on YouTube</div>` : ''}
     </div>
     <div data-col="Updated"><span class="small muted">${esc(fmtAgo(j.updatedAt))}</span>
       <div class="cell-sub">Created ${esc(fmtDateTime(j.createdAt))}</div>
@@ -64,15 +103,15 @@ function jobRow(j) {
 
 function detailDrawer(j) {
   const canApprove = ['needs-review', 'awaiting-review'].includes(j.status);
-  const canPublish = j.status === 'approved' || (j.status === 'scheduled');
-  const canRetry = j.status === 'failed';
-  const blocked = j.publishBlocked;
+  const canPublish = ['approved', 'scheduled'].includes(j.status);
+  const canRetry = ['failed', 'publish_failed'].includes(j.status);
+  const blocked = canPublish || canApprove ? j.publishBlocked : null;
   const why = {
-    reject: j.status === 'published' ? 'Published videos cannot be rejected.' : '',
+    reject: REJECTABLE.includes(j.status) ? '' : j.status === 'uploading' ? 'It is uploading right now.' : `A ${friendlyStatus(j.status)} video cannot be rejected.`,
     approve: canApprove ? '' : 'Only videos awaiting review can be approved.',
-    publish: blocked ? blocked : canPublish ? '' : 'Approve (or schedule) the video before publishing.',
-    retry: canRetry ? '' : 'Only failed jobs can be retried.',
-    regenerate: j.status === 'published' ? 'Published videos cannot be regenerated — create a new topic instead.' : '',
+    publish: canPublish ? (blocked || '') : 'Approve the video first.',
+    retry: canRetry ? '' : 'Only failed runs or failed uploads can be retried.',
+    regenerate: ['published', 'uploading'].includes(j.status) ? 'Published or uploading videos cannot be redone — add a new topic instead.' : '',
     edit: j.status === 'published' ? 'Published videos cannot be edited.' : '',
   };
   const hasRun = !!j.runId && !j.demo;
@@ -99,7 +138,7 @@ function detailDrawer(j) {
     <div>
       <div class="row" style="margin-bottom:6px">
         <strong class="small">Metadata (this is what will be sent to YouTube)</strong>
-        <button class="btn btn--ghost btn--sm" id="btn-edit-meta" ${why.edit ? `disabled title="${esc(why.edit)}"` : ''}>${icon('doc', 'icon--sm')} Edit</button>
+        <button class="btn btn--ghost btn--sm" id="btn-edit-meta" ${disabledAttr(why.edit)}>${icon('doc', 'icon--sm')} Edit</button>
       </div>
       <h3 style="font-size:16px;font-weight:750;letter-spacing:-.2px">${esc(j.title)}</h3>
       <p class="small muted" style="margin-top:6px;line-height:1.65">${esc(j.description || 'No description generated yet.')}</p>
@@ -112,12 +151,14 @@ function detailDrawer(j) {
       <dt>Scheduled</dt><dd>${j.scheduledFor ? esc(fmtDateTime(j.scheduledFor)) : '—'}</dd>
       <dt>Published</dt><dd>${j.publishedAt ? esc(fmtDateTime(j.publishedAt)) : '—'}</dd>
       ${j.parentJobId ? `<dt>Regenerated from</dt><dd class="mono"><a href="#/queue?job=${encodeURIComponent(j.parentJobId)}">${esc(j.parentJobId)}</a></dd>` : ''}
-      ${j.youtubeId ? `<dt>YouTube ID</dt><dd class="mono">${esc(j.youtubeId)}</dd>` : ''}
-      ${j.youtubeUrl ? `<dt>YouTube URL</dt><dd><a href="${esc(j.youtubeUrl)}" target="_blank" rel="noopener">${esc(j.youtubeUrl)}</a></dd>` : ''}
+      ${(j.videos || []).map((v) => `<dt>${v.kind === 'short' ? 'YouTube Short' : v.kind === 'long' ? 'Long video' : 'YouTube'}</dt><dd><a href="${esc(v.youtube_url)}" target="_blank" rel="noopener">${esc(v.youtube_url)}</a></dd>`).join('')}
+      ${!(j.videos || []).length && j.youtubeUrl ? `<dt>YouTube</dt><dd><a href="${esc(j.youtubeUrl)}" target="_blank" rel="noopener">${esc(j.youtubeUrl)}</a></dd>` : ''}
+      ${j.reviewNote ? `<dt>Review note</dt><dd>${esc(j.reviewNote)}</dd>` : ''}
       <dt>Job ID</dt><dd class="mono">${esc(j.id)}</dd>
     </dl>
-    ${j.error ? `<div class="callout callout--danger">${icon('alert')}<div><strong>Failure${j.errorCategory ? ` (${esc(j.errorCategory)})` : ''}.</strong> ${esc(j.error)}
-      ${j.errorRetryable === false ? '<br>This failure is classified as non-retryable — fix the configuration before retrying.' : ''}</div></div>` : ''}
+    ${j.error && ['failed', 'publish_failed', 'cancelled'].includes(j.status) ? `<div class="callout callout--danger">${icon('alert')}<div><strong>${esc(failureLabel(j.errorCategory) || 'Failed')}.</strong> ${esc(j.error)}
+      ${j.errorRetryable === false ? '<br>This needs a fix before retrying.' : ''}
+      ${j.errorLog ? `<details style="margin-top:6px"><summary class="small">Last lines of the engine log</summary><pre class="log-tail">${esc(j.errorLog)}</pre></details>` : ''}</div></div>` : ''}
     ${blocked ? `<div class="callout callout--warn">${icon('lock')}<div><strong>Publishing blocked.</strong> ${esc(blocked)}</div></div>` : ''}
     ${j.duplicateOf ? `<div class="callout callout--warn">${icon('copy')}<div><strong>Possible duplicate.</strong> Matches existing topic${j.duplicateOf.url ? ` — <a href="${esc(j.duplicateOf.url)}" target="_blank" rel="noopener">existing video</a>` : ''}. Normalised topic key: <span class="mono">${esc(j.duplicateOf.key || '')}</span></div></div>` : ''}
     <div>
@@ -143,16 +184,17 @@ function detailDrawer(j) {
     </div>`;
 
   const btn = (action, label, ic, cls = 'btn--secondary') =>
-    `<button class="${cls} btn--sm" data-jact="${action}" ${why[action] ? `disabled title="${esc(why[action])}"` : ''}>${icon(ic, 'icon--sm')} ${label}</button>`;
+    `<button class="${cls} btn--sm" data-jact="${action}" ${disabledAttr(why[action])}>${icon(ic, 'icon--sm')} ${label}</button>`;
 
-  const foot = `
-    ${btn('reject', 'Reject', 'x', 'btn--danger')}
-    ${btn('regenerate', 'Regenerate', 'refresh')}
-    ${btn('retry', 'Retry', 'run')}
-    ${btn('schedule', 'Schedule', 'calendar')}
-    ${btn('approve', 'Approve & Schedule', 'check', 'btn--primary')}
-    ${btn('publish', 'Publish', 'upload', 'btn--primary')}
-    ${j.youtubeUrl ? `<a class="btn btn--ghost btn--sm" href="${esc(j.youtubeUrl)}" target="_blank" rel="noopener">${icon('external', 'icon--sm')} Open YouTube</a>` : ''}`;
+  // Only the actions that make sense now; the time-of-day schedule control is
+  // hidden (nothing acts on it yet). Approve = approve + upload in one tap.
+  const foot = j.status === 'published' ? `<div class="yt-links">${videoLinks(j)}</div>` : `
+    ${canApprove ? btn('approve', 'Approve & publish', 'check', 'btn--primary') : ''}
+    ${canPublish ? btn('publish', 'Publish', 'upload', 'btn--primary') : ''}
+    ${canRetry ? btn('retry', j.status === 'publish_failed' ? 'Retry upload' : 'Retry', 'run') : ''}
+    ${REJECTABLE.includes(j.status) ? btn('reject', 'Reject', 'x', 'btn--danger') : ''}
+    ${why.regenerate ? '' : btn('regenerate', 'Redo', 'refresh')}
+    ${blocked && (canPublish || (canApprove && !/review|Approve the video/i.test(blocked))) ? `<div class="small" style="flex-basis:100%;color:var(--amber, #b45309)">${icon('lock', 'icon--sm')} ${esc(blocked)}</div>` : ''}`;
 
   openDrawer({ title: 'Video Details', body, foot });
   // Live step-by-step progress while the job runs (stops when done/closed).
@@ -219,38 +261,30 @@ function detailDrawer(j) {
     const b = e.target.closest('[data-jact]');
     if (!b || b.disabled) return;
     const action = b.dataset.jact;
+    let payload = {};
     if (action === 'reject') {
-      if (!await confirmModal('Reject this video?', 'The job is marked rejected and will not publish. Generated artifacts are kept.', 'Reject', true)) return;
+      const reason = await askText('Reject this video', 'What is wrong with it? This note is kept and used as feedback when you tap Redo.', 'e.g. Too many crowd clips; the intro is too slow', 'Reject');
+      if (reason === null) return;
+      payload = { reason };
     }
-    if (action === 'schedule') {
-      openModal({
-        title: 'Schedule publishing',
-        body: `<div class="field"><label class="field__label" for="sch-when">Publish at (IST)</label>
-               <input class="input" type="datetime-local" id="sch-when">
-               <div class="field__hint">The console enforces the daily upload cap and duplicate check again at publish time.</div></div>`,
-        foot: `<button class="btn btn--secondary" id="m-cancel">Cancel</button>
-               <button class="btn btn--primary" id="m-save">Save schedule</button>`,
-      });
-      document.getElementById('m-cancel').onclick = closeModal;
-      document.getElementById('m-save').onclick = async () => {
-        const when = document.getElementById('sch-when').value;
-        if (!when) { toast('Pick a time', 'Choose when this video should publish.', 'warn'); return; }
-        try {
-          const res = await api.jobAction(j.id, 'schedule', { when: new Date(when).toISOString() });
-          closeModal(); closeDrawer();
-          toast('Scheduled', res.message, 'ok');
-          await refresh();
-        } catch (err) { toast('Schedule failed', err.message, 'bad'); }
-      };
-      return;
+    if (action === 'approve') {
+      if (!await confirmModal('Approve and publish?', 'This approves the video and starts the YouTube upload now, with the visibility set in Settings. The daily cap and duplicate checks still apply.', 'Approve & publish')) return;
+    }
+    if (action === 'publish' || (action === 'retry' && j.status === 'publish_failed')) {
+      if (!await confirmModal(action === 'publish' ? 'Publish now?' : 'Retry the upload?', 'The console first checks that nothing from this job already reached YouTube, so it cannot upload twice.', action === 'publish' ? 'Publish' : 'Retry upload')) return;
+    }
+    if (action === 'regenerate') {
+      const fb = await askText('Redo this video', 'Optional: what should change? Saved with the new attempt (and sent to the engine once it accepts feedback).', j.reviewNote || '', 'Start redo', true);
+      if (fb === null) return;
+      payload = fb ? { feedback: fb } : {};
     }
     b.disabled = true; // double-submission guard
     try {
       const res = action === 'retry'
         ? await api.jobRetry(j.id)
-        : await api.jobAction(j.id, action, {});
+        : await api.jobAction(j.id, action, payload);
       closeDrawer();
-      toast('Done', res.message || 'Action completed.', 'ok');
+      toast(res.published === false ? 'Approved — not uploaded yet' : 'Done', res.message || 'Action completed.', res.published === false ? 'warn' : 'ok');
       await refresh();
     } catch (err) {
       b.disabled = false;
@@ -277,6 +311,7 @@ async function refresh() {
       </div>
       <div class="page-head__actions">
         <span class="badge-soft">${icon('shield', 'icon--sm')} Human approval enabled</span>
+        ${data.cap ? `<span class="badge-soft badge-soft--neutral">${icon('upload', 'icon--sm')} Today: ${esc(String(data.cap.used))}/${esc(String(data.cap.limit))} uploads · resets ${esc(data.cap.resets || '05:30 IST')}</span>` : ''}
         <span class="badge-soft badge-soft--neutral">${icon('copy', 'icon--sm')} Duplicate topics blocked</span>
         <button class="btn btn--primary" id="btn-add-topic">${icon('plus', 'icon--sm')} Add new topic</button>
       </div>
@@ -285,7 +320,7 @@ async function refresh() {
     <div class="row row--wrap filter-bar" style="margin-bottom:10px">
       ${STATUS_TABS.map(([key, label]) => `
         <button class="chip ${view.tab === key ? 'is-active' : ''}" data-tab="${key}">
-          ${esc(label)} <span class="chip__count">${counts[key === '' ? 'all' : key] ?? 0}</span>
+          ${esc(label)} <span class="chip__count">${chipCount(counts, key)}</span>
         </button>`).join('')}
     </div>
     <div class="row row--wrap filter-bar" style="margin-bottom:14px">

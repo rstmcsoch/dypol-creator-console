@@ -161,6 +161,17 @@ window.addEventListener('dypol:unauthorized', () => {
   showLogin();
 });
 
+// Touch-friendly explanations: a tap on anything aria-disabled shows WHY
+// (hover-only tooltips are invisible on phones/tablets).
+document.addEventListener('click', (e) => {
+  const el = e.target.closest?.('[aria-disabled="true"]');
+  if (!el) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const why = el.dataset.why || el.getAttribute('title') || 'Not available right now.';
+  toast('Not available', why, 'warn');
+}, true);
+
 document.getElementById('hamburger').addEventListener('click', () => {
   document.getElementById('sidebar').classList.add('is-open');
   document.getElementById('sidebar-scrim').classList.add('is-open');
