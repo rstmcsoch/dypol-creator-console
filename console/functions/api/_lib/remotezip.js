@@ -3,8 +3,8 @@
  * HTTP Range requests, so a 100 MB draft artifact never has to be downloaded
  * or buffered to show one video or read one small JSON file.
  *
- *  - openRemoteZip(url): 1 request (tail: EOCD + central directory; +1 if the
- *    directory does not fit in the last 64 KB). ZIP64 aware.
+ *  - openRemoteZip(url): 2 requests (size probe + tail: EOCD + central
+ *    directory; +1 if the directory does not fit in the last 64 KB). ZIP64 aware.
  *  - entryDataOffset(url, entry): 1 request (the 30-byte local header).
  *  - streamEntry(url, entry, rangeHeader): 1 request. Stored entries (method 0,
  *    e.g. upload-artifact compression-level: 0) are streamed byte-for-byte and
@@ -83,11 +83,16 @@ export function parseCentralDirectory(bytes, count) {
 
 /** Open a remote zip: { url, total, entries }. */
 export async function openRemoteZip(url, fetchImpl = fetch) {
-  const res = await rangeFetch(url, `-${TAIL}`, fetchImpl);
-  const total = totalFromContentRange(res.headers.get('Content-Range'));
-  const tail = new Uint8Array(await res.arrayBuffer());
+  // Azure blob storage (where GitHub keeps artifacts) ignores suffix ranges
+  // ("bytes=-N" returns the WHOLE blob), so learn the size with a 1-byte probe
+  // and then ask for an explicit tail window.
+  const probe = await rangeFetch(url, '0-0', fetchImpl);
+  const total = totalFromContentRange(probe.headers.get('Content-Range'));
+  try { await probe.arrayBuffer(); } catch { /* ignore */ }
   if (!total) throw new Error('Remote zip: missing Content-Range total');
-  const tailStart = total - tail.byteLength;
+  const tailStart = Math.max(0, total - TAIL);
+  const res = await rangeFetch(url, `${tailStart}-${total - 1}`, fetchImpl);
+  const tail = new Uint8Array(await res.arrayBuffer());
   const view = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
   let eocd = -1;
   for (let i = tail.byteLength - 22; i >= 0; i--) {

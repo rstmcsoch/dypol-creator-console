@@ -20,8 +20,11 @@ import { openRemoteZip, readEntryBytes } from './remotezip.js';
 import { utcDayStartIso } from './db.js';
 
 export const REFRESH_MS = 30 * 60e3;
+// Bump when the cached panel's shape changes, so a deploy never serves an old shape.
+export const CACHE_KEY = 'panel-v2';
 export const SUBREQUEST_BUDGET = 40; // Workers limit is 50; leave headroom
-export const ACTIONS_FREE_BYTES = 500 * 1024 * 1024;
+export const ACTIONS_FREE_BYTES = 500 * 1024 * 1024; // artifact storage on the Free plan (account-wide)
+export const CACHE_LIMIT_BYTES = 10 * 1024 * 1024 * 1024; // Actions cache: 10 GB per repository, separate from the 500 MB
 export const YT_DAILY_UNITS = 10000;
 export const YT_UNITS_PER_VIDEO = 1600 + 50 + 400; // insert + thumbnails.set + captions.insert
 const ENGINES = ['gemini', 'verticals'];
@@ -46,7 +49,7 @@ export async function ensureQuotaSchema(db) {
 
 export async function readQuotaCache(db) {
   await ensureQuotaSchema(db);
-  const row = await db.prepare('SELECT data, updated_at FROM quota_cache WHERE key = ?').bind('panel').first();
+  const row = await db.prepare('SELECT data, updated_at FROM quota_cache WHERE key = ?').bind(CACHE_KEY).first();
   if (!row) return null;
   try { return { data: JSON.parse(row.data), updatedAt: Number(row.updated_at) }; } catch { return null; }
 }
@@ -55,7 +58,7 @@ export async function writeQuotaCache(db, data, now = Date.now()) {
   await ensureQuotaSchema(db);
   await db.prepare(`INSERT INTO quota_cache (key, data, updated_at) VALUES (?, ?, ?)
     ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`)
-    .bind('panel', JSON.stringify(data), now).run();
+    .bind(CACHE_KEY, JSON.stringify(data), now).run();
 }
 
 /* ---------------- log scanning ---------------- */
@@ -111,7 +114,7 @@ const JUDGE_ENTRY = /(candidates\/[^/]+\/candidate\.json|broll_manifest\.json|dr
 
 async function readJudge(token, gh, artifact, budget) {
   if (!artifact) return null;
-  if (!budget.take(4, 'judge summary')) return { skipped: true };
+  if (!budget.take(5, 'judge summary')) return { skipped: true };
   try {
     const url = await artifactBlobUrl(token, { ...gh, artifactId: artifact.id });
     if (!url) return null;
@@ -274,7 +277,16 @@ export async function collectQuota(env, { settings, jobs, capUsage, now = Date.n
   const engines = [];
   for (const engine of ENGINES) engines.push(await collectEngine(engine, { token, settings, jobs, now, budget }));
 
-  const used = engines.reduce((n, e) => n + (e.storage.cacheBytes || 0) + (e.storage.artifactBytes || 0), 0);
+  // The 500 MB free storage counts ARTIFACTS; caches have their own 10 GB per-repo limit.
+  const used = engines.reduce((n, e) => n + (e.storage.artifactBytes || 0), 0);
+  const cacheBytes = engines.reduce((n, e) => n + (e.storage.cacheBytes || 0), 0);
+  for (const e of engines) {
+    const art = e.storage.artifactBytes || 0;
+    const cache = e.storage.cacheBytes || 0;
+    e.storage.state = e.storage.artifactBytes === null && e.storage.cacheBytes === null ? 'unknown'
+      : art > ACTIONS_FREE_BYTES * 0.5 || cache > CACHE_LIMIT_BYTES * 0.9 ? 'bad'
+        : art > ACTIONS_FREE_BYTES * 0.3 || cache > CACHE_LIMIT_BYTES * 0.7 ? 'warn' : 'ok';
+  }
   const ytVideos = engines.reduce((n, e) => n + e.uploadsToday.videos, 0);
   const cap = Number(settings.publishing?.dailyCap ?? 2);
   return {
@@ -291,6 +303,8 @@ export async function collectQuota(env, { settings, jobs, capUsage, now = Date.n
     },
     storage: {
       usedBytes: used,
+      cacheBytes,
+      cacheLimitBytesPerRepo: CACHE_LIMIT_BYTES,
       freeBytes: ACTIONS_FREE_BYTES,
       pct: Math.round((used / ACTIONS_FREE_BYTES) * 100),
       state: used > ACTIONS_FREE_BYTES * 0.9 ? 'bad' : used > ACTIONS_FREE_BYTES * 0.7 ? 'warn' : 'ok',

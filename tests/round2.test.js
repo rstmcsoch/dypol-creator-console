@@ -73,7 +73,8 @@ const route = (method, match, res) => routes.push({ method, match: typeof match 
 function blob(bytes, { rangeless = false } = {}) {
   return (u, opts = {}) => {
     const range = (opts.headers || {}).Range;
-    if (!range || rangeless) return new Response(bytes, { status: 200, headers: { 'Content-Length': String(bytes.length) } });
+    // Like Azure: a suffix range is ignored and the whole blob comes back (200).
+    if (!range || rangeless || /bytes=-/.test(range)) return new Response(bytes, { status: 200, headers: { 'Content-Length': String(bytes.length) } });
     let [, a, b] = /bytes=(\d*)-(\d*)/.exec(range);
     let start; let end;
     if (a === '') { start = Math.max(0, bytes.length - Number(b)); end = bytes.length - 1; } else { start = Number(a); end = b === '' ? bytes.length - 1 : Math.min(Number(b), bytes.length - 1); }
@@ -286,6 +287,7 @@ function quotaRoutes({ today }) {
   route('GET', /actions\/artifacts\/11\/zip/, { status: 302, headers: { Location: 'https://blob.example/ca' } });
   route('GET', /actions\/artifacts\/12\/zip/, { status: 302, headers: { Location: 'https://blob.example/cb' } });
   route('GET', 'blob.example/ca', blob(candA));
+  // (blob() honours suffix ranges, but openRemoteZip must not rely on them: Azure ignores "bytes=-N")
   route('GET', 'blob.example/cb', blob(candB));
 }
 
@@ -318,8 +320,10 @@ test('quota API: per-engine panel within the subrequest budget, cached in D1 for
   assert.equal(ea.storage.artifactBytes, 100 * 1024 * 1024, 'expired artifacts excluded');
   assert.equal(eb.llmUnavailable7d, 1);
   assert.equal(eb.flux.state, 'ok');
-  assert.equal(d.storage.usedBytes, 300 * 1024 * 1024);
+  assert.equal(d.storage.usedBytes, 200 * 1024 * 1024, 'artifacts only count toward the 500 MB');
+  assert.equal(d.storage.cacheBytes, 100 * 1024 * 1024);
   assert.equal(d.storage.state, 'ok');
+  assert.equal(ea.storage.state, 'ok');
 
   // Second call within 30 min: served from D1, no GitHub calls at all.
   calls.length = 0;
@@ -327,7 +331,7 @@ test('quota API: per-engine panel within the subrequest budget, cached in D1 for
   assert.equal(again.cached, true);
   assert.equal(calls.length, 0);
   // Older than 30 min → recomputed.
-  env.DB._raw.prepare("UPDATE quota_cache SET updated_at = ? WHERE key = 'panel'").run(Date.now() - 31 * 60e3);
+  env.DB._raw.prepare("UPDATE quota_cache SET updated_at = ? WHERE key = ?").run(Date.now() - 31 * 60e3, quota.CACHE_KEY);
   const fresh = await (await quotaApi.onRequestGet(getCtx(env, 'https://c.pages.dev/api/quota'))).json();
   assert.equal(fresh.cached, false);
 });

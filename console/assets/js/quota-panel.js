@@ -36,7 +36,7 @@ function engineBlock(e) {
     ${row('Pixabay limit', e.pixabay.state === 'bad' ? 'Hit today' : e.pixabay.state === 'ok' ? 'OK' : '—', e.pixabay.state, e.pixabay.detail)}
     ${row('NVIDIA visual judge', e.judge.calls === null || e.judge.calls === undefined ? '—' : `${e.judge.calls} call${e.judge.calls === 1 ? '' : 's'}`, e.judge.state, e.judge.detail)}
     ${row('Gemini unavailable (7 days)', String(e.llmUnavailable7d), e.llmUnavailable7d >= 3 ? 'bad' : e.llmUnavailable7d ? 'warn' : 'ok', 'Jobs that failed with llm_unavailable')}
-    ${row('Actions storage', fmtMB((st.cacheBytes || 0) + (st.artifactBytes || 0)), 'ok', `Artifacts ${fmtMB(st.artifactBytes)} (${st.artifactCount ?? '—'}) · cache ${fmtMB(st.cacheBytes)}`)}
+    ${row('Actions artifacts', fmtMB(st.artifactBytes), st.state || 'off', `${st.artifactCount ?? '—'} live artifacts · cache ${fmtMB(st.cacheBytes)} of 10 GB (separate limit)`)}
     ${(e.notes || []).length ? `<div class="qrow__sub" style="padding:4px 0 0 30px">${esc(e.notes.join(' · '))}</div>` : ''}
   </div>`;
 }
@@ -62,9 +62,9 @@ export function renderQuota(d) {
       ${row('YouTube uploads today (console cap)', `${yt.usedJobs ?? 0} / ${yt.capJobs ?? 2}`, capState, `${yt.videosToday ?? 0} videos · ~${(yt.estUnits ?? 0).toLocaleString('en-IN')} of ${(yt.dailyUnits ?? 10000).toLocaleString('en-IN')} API units (est.) · UTC day`)}
       <div class="qrow">
         ${dot(sto.state || 'off')}
-        <div class="qrow__main"><div class="qrow__label">GitHub Actions storage (both repos)</div>
+        <div class="qrow__main"><div class="qrow__label">GitHub Actions artifact storage (both repos)</div>
           <div class="qbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.min(100, sto.pct || 0)}"><span style="width:${Math.min(100, sto.pct || 0)}%"></span></div>
-          <div class="qrow__sub">Artifacts + caches vs 500 MB free</div></div>
+          <div class="qrow__sub">Live artifacts vs 500 MB free (caches: ${esc(fmtMB(sto.cacheBytes))}, own 10 GB/repo limit)</div></div>
         <div class="qrow__value">${esc(fmtMB(sto.usedBytes))}</div>
       </div>
     </div>
