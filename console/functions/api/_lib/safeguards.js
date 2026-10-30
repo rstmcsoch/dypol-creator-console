@@ -9,7 +9,7 @@
  * only POST /publish takes the lock, and the caller releases it explicitly.
  */
 import { topicKey, normalizeTopic, nowIso, TZ, uid } from './util.js';
-import { findUploadByKey, recordUpload, uploadsOnDate, listJobs, updateJob, addActivity } from './db.js';
+import { findUploadByKey, recordUpload, capUsage, listJobs, updateJob, addActivity } from './db.js';
 
 /** Returns {key, norm, job, exact} or null. */
 export async function findDuplicate(db, title, excludeJobId = null) {
@@ -72,7 +72,7 @@ export async function checkPublishGate(db, job, settings) {
   if (pub.draftMode) {
     return { ok: false, code: 'draft-mode', error: 'Draft-only mode is on — generation results are saved but nothing uploads.' };
   }
-  if (pub.reviewRequired && !['approved', 'scheduled'].includes(job.status)) {
+  if (pub.reviewRequired && !['approved', 'scheduled', 'publish_failed'].includes(job.status)) {
     return { ok: false, code: 'review-required', error: 'Publishing blocked — review-required mode is on. Approve the video first.' };
   }
   if (pub.dedupe) {
@@ -81,10 +81,13 @@ export async function checkPublishGate(db, job, settings) {
       return { ok: false, code: 'duplicate', error: `Publishing blocked — duplicate of “${dup.job.title}” (key ${dup.key}).` };
     }
   }
-  const n = await uploadsOnDate(db, todayStr());
-  const inflight = await db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status = 'uploading'").first();
-  if (n + Number(inflight?.n || 0) >= pub.dailyCap) {
-    return { ok: false, code: 'daily-cap', error: `Daily publishing cap reached (${pub.dailyCap}/day, IST).` };
+  const usage = await capUsage(db);
+  if (usage.total >= pub.dailyCap) {
+    return {
+      ok: false, code: 'daily-cap',
+      error: `Daily publishing cap reached (${pub.dailyCap}/day, resets 05:30 IST): ${usage.published} published today`
+        + (usage.uploading ? `, ${usage.uploading} uploading` : '') + '.',
+    };
   }
   return { ok: true, code: 'cleared', key };
 }
@@ -111,7 +114,7 @@ export async function publishGate(db, job, settings) {
  * marked ok; everything else is 'skipped' (labelled for human review) or
  * 'pending'. Copyright / factual accuracy are NEVER auto-passed.
  */
-export function buildQuality(job, { oauthConfigured = false, hasArtifact = null, durationKnown = null } = {}) {
+export function buildQuality(job, { oauthConfigured = false, hasArtifact = null, durationKnown = null, engineVerifiedAt = null } = {}) {
   const titleLen = String(job.title || '').length;
   const hasMeta = !!(job.description || '').trim() || (job.tags || []).length > 0;
   return {
@@ -124,9 +127,13 @@ export function buildQuality(job, { oauthConfigured = false, hasArtifact = null,
       : durationKnown ? { state: 'ok', label: 'Duration > 0' }
       : { state: 'failed', label: 'Zero/unknown duration' },
     duplicate: { state: 'skipped', label: 'Checked at publish time' },
-    oauth: oauthConfigured
-      ? { state: 'warn', label: 'Configured (not tested)' }
-      : { state: 'failed', label: 'Not configured' },
+    // YouTube OAuth lives in the ENGINE repo secrets, not in the console, so
+    // the console can only report what a real upload proved.
+    oauth: engineVerifiedAt
+      ? { state: 'ok', label: `Verified by last successful upload (${String(engineVerifiedAt).slice(0, 10)})` }
+      : oauthConfigured
+        ? { state: 'warn', label: 'Configured (not tested)' }
+        : { state: 'skipped', label: 'Held by the engine — verified when an upload succeeds' },
     review: ['approved', 'scheduled', 'published'].includes(job.status)
       ? { state: 'ok', label: 'Approved' }
       : { state: 'pending', label: 'Awaiting review' },
@@ -143,35 +150,28 @@ export function buildQuality(job, { oauthConfigured = false, hasArtifact = null,
  * Returns the result object {job_id, youtube_id, videos[], ...} or null.
  * Never uploads anything; read-only against GitHub.
  */
-export async function findUploadEvidence(token, gh, job) {
-  const { listRepoDir, fetchRepoFile, listRunArtifacts, downloadArtifact } = await import('./github.js');
+export async function findUploadEvidence(token, gh, job, { runIds = [] } = {}) {
+  const { fetchRunResult, listRunArtifacts, downloadArtifact } = await import('./github.js');
   const { extractFirstEntry } = await import('./ziputil.js');
-
-  // 1. Committed result files.
-  try {
-    const files = await listRepoDir(token, { ...gh, path: 'dypol-results' });
-    for (const f of files.slice(0, 30)) {
-      if (!f.name.endsWith('.json')) continue;
-      const raw = await fetchRepoFile(token, { ...gh, path: f.path });
-      if (!raw) continue;
-      try {
-        const res = JSON.parse(raw);
-        if (res && res.job_id === job.id && res.youtube_id) return res;
-      } catch { /* skip malformed */ }
-    }
-  } catch { /* repo unreadable — fall through to artifacts */ }
-
-  // 2. Artifact backup (covers "upload succeeded but the result commit failed").
-  if (job.runId) {
+  // Only the job's own PUBLISH runs can carry its upload result. Each is read
+  // by exact path (dypol-results/<run_id>.json on dypol-integration) — never a
+  // capped directory listing.
+  const ids = [...new Set([job.publishRunId, ...runIds].filter(Boolean).map(String))];
+  for (const runId of ids) {
     try {
-      const artifacts = await listRunArtifacts(token, { ...gh, runId: job.runId });
-      const backup = artifacts.find((a) => a.name === `upload-result-${job.runId}`);
+      const res = await fetchRunResult(token, { ...gh, runId });
+      if (res && res.job_id === job.id && res.youtube_id) return { ...res, run_id: res.run_id || runId };
+    } catch { /* unreadable — try the artifact */ }
+    // Artifact backup (covers "upload succeeded but the result commit failed").
+    try {
+      const artifacts = await listRunArtifacts(token, { ...gh, runId });
+      const backup = artifacts.find((a) => a.name === `upload-result-${runId}`);
       if (backup) {
         const zip = await downloadArtifact(token, { ...gh, artifactId: backup.id });
         const entry = await extractFirstEntry(zip, '.json');
         if (entry) {
           const res = JSON.parse(new TextDecoder().decode(entry.bytes));
-          if (res && (res.job_id === job.id || !res.job_id) && res.youtube_id) return res;
+          if (res && res.job_id === job.id && res.youtube_id) return { ...res, run_id: res.run_id || runId };
         }
       }
     } catch { /* artifact expired or unreachable */ }
@@ -196,9 +196,15 @@ export async function recordPublished(db, job, youtubeId, extra = {}) {
       idempotencyKey: `${uploadIdempotencyKey(job.title, job.id)}:${v.kind || v.youtube_id}`,
     }).catch(() => {});
   }
+  const videos = (extra.videos && extra.videos.length ? extra.videos : [{ kind: job.format === 'short' ? 'short' : 'long', youtube_id: youtubeId }])
+    .filter((v) => v && v.youtube_id)
+    .map((v) => ({ kind: v.kind || 'video', youtube_id: v.youtube_id, youtube_url: v.youtube_url || `https://youtu.be/${v.youtube_id}` }));
   await updateJob(db, job.id, {
-    status: 'published', stage: 'Upload complete', progress: 100,
-    publishedAt: nowIso(), youtubeId, youtubeUrl: extra.url || `https://youtu.be/${youtubeId}`,
+    status: 'published', stage: 'Published on YouTube', progress: 100,
+    publishedAt: extra.publishedAt || nowIso(), youtubeId, youtubeUrl: extra.url || `https://youtu.be/${youtubeId}`,
+    videos, uploadingSince: null, publishBlocked: null,
+    error: null, errorCategory: null, errorRetryable: null, errorLog: null,
+    ...(extra.publishRunId ? { publishRunId: String(extra.publishRunId) } : {}),
   });
   const extraIds = (extra.videos || []).filter((v) => v.youtube_id && v.youtube_id !== youtubeId);
   await addActivity(db, { icon: 'upload', tone: 'green', title: 'Video uploaded', sub: job.title });
@@ -206,6 +212,40 @@ export async function recordPublished(db, job, youtubeId, extra = {}) {
 }
 
 /* ---------------- Error taxonomy (P2: categories + retryability) ---------------- */
+/* Run-failure categories shown to the reviewer (from the failed job's log). */
+export const FAILURE_CATEGORIES = {
+  llm_unavailable: 'AI model unavailable (temporary)',
+  content_gate: 'Blocked by the name check',
+  asset: 'Visuals / voice asset problem',
+  render: 'Video render failed',
+  publish: 'YouTube upload failed',
+  unknown: 'Unclassified failure',
+};
+
+/** Classify a failed run from its step name + log tail. phase: 'draft'|'publish'. */
+export function classifyFailure(text, phase = 'draft') {
+  // Repo names/paths contain "gemini" and "youtube" — remove them first.
+  const m = String(text || '').toLowerCase()
+    .replace(/gemini-youtube-automation|youtube-shorts-pipeline/g, '');
+  if (/name gate|personal[- ]name|validate_no_personal_names|name_gate|names? check/.test(m)) {
+    return { category: 'content_gate', retryable: true };
+  }
+  if (phase === 'publish') return { category: 'publish', retryable: true };
+  if (/videos\.insert|invalid_grant|quotaexceeded|uploadlimitexceeded|insufficientpermissions|youtube data api|youtube upload/.test(m)) {
+    return { category: 'publish', retryable: true };
+  }
+  if (/\b503\b|unavailable|server disconnected|remoteprotocolerror|overloaded|high demand|resource_exhausted|deadline exceeded|failed to generate|generativelanguage|\b500 internal/.test(m)) {
+    return { category: 'llm_unavailable', retryable: true };
+  }
+  if (/ffmpeg|moviepy|render|encoder|pillow|valueerror: x1|imageio|libx264|composit/.test(m)) {
+    return { category: 'render', retryable: true };
+  }
+  if (/pixabay|flux|workers ai|neurons|kokoro|\btts\b|b-?roll|stock (clip|image|video)|image generation|download(ing)? (clip|image)/.test(m)) {
+    return { category: 'asset', retryable: true };
+  }
+  return { category: 'unknown', retryable: true };
+}
+
 export const ERROR_CATEGORIES = {
   dispatch: 'Dispatch failure',
   config: 'Missing configuration',
@@ -223,6 +263,7 @@ export const ERROR_CATEGORIES = {
 
 export function classifyError(message) {
   const m = String(message || '').toLowerCase();
+  if (m.includes('unexpected inputs')) return { category: 'dispatch', retryable: false };
   if (m.includes('workflow_dispatch') || m.includes('dispatch failed') || m.includes('404') && m.includes('workflow')) return { category: 'dispatch', retryable: true };
   if (m.includes('not configured') || m.includes('missing')) return { category: 'config', retryable: false };
   if (m.includes('403') || m.includes('permission') || m.includes('bad credentials')) return { category: 'permission', retryable: false };

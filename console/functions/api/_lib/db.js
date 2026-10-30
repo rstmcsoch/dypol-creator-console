@@ -25,6 +25,11 @@ export function rowToJob(r) {
     publishBlocked: r.publish_blocked,
     duplicateOf: parse(r.duplicate_of, null),
     currentStep: r.current_step || null,
+    publishRunId: r.publish_run_id || null,
+    uploadingSince: r.uploading_since ? Number(r.uploading_since) : null,
+    reviewNote: r.review_note || null,
+    videos: parse(r.videos, []),
+    errorLog: r.error_log || null,
     demo: false,
   };
 }
@@ -36,6 +41,7 @@ export function rowToRun(r) {
     status: r.status, failureReason: r.failure_reason, githubUrl: r.github_url,
     steps: parse(r.steps, []), logs: parse(r.logs, []), artifacts: parse(r.artifacts, []),
     conclusion: r.conclusion || null, currentStep: r.current_step || null, completedAt: r.completed_at || null,
+    phase: r.phase || null,
     demo: false,
   };
 }
@@ -102,6 +108,8 @@ export async function updateJob(db, id, patch) {
     publishBlocked: 'publish_blocked', durationSec: 'duration_sec', thumbnail: 'thumbnail',
     title: 'title', topic: 'topic', niche: 'niche', format: 'format',
     errorCategory: 'error_category', attempt: 'attempt', parentJobId: 'parent_job_id',
+    publishRunId: 'publish_run_id', uploadingSince: 'uploading_since', reviewNote: 'review_note',
+    errorLog: 'error_log',
   };
   const sets = [], args = [];
   for (const [k, col] of Object.entries(map)) {
@@ -111,6 +119,7 @@ export async function updateJob(db, id, patch) {
   if (patch.tags !== undefined) { sets.push('tags = ?'); args.push(JSON.stringify(patch.tags)); }
   if (patch.quality !== undefined) { sets.push('quality = ?'); args.push(JSON.stringify(patch.quality)); }
   if (patch.logs !== undefined) { sets.push('logs = ?'); args.push(JSON.stringify(patch.logs)); }
+  if (patch.videos !== undefined) { sets.push('videos = ?'); args.push(patch.videos ? JSON.stringify(patch.videos) : null); }
   if (patch.duplicateOf !== undefined) { sets.push('duplicate_of = ?'); args.push(patch.duplicateOf ? JSON.stringify(patch.duplicateOf) : null); }
   sets.push('updated_at = ?'); args.push(nowIso());
   args.push(id);
@@ -135,6 +144,18 @@ export async function getRun(db, id) {
 }
 
 export async function insertRun(db, run) {
+  if (run.phase) {
+    await db.prepare(`INSERT INTO runs
+      (id, run_id, engine, workflow, job_id, started_at, duration_sec, status,
+       failure_reason, github_url, steps, logs, artifacts, phase)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .bind(run.id, run.runId, run.engine, run.workflow, run.jobId, run.startedAt,
+        run.durationSec, run.status, run.failureReason, run.githubUrl,
+        JSON.stringify(run.steps || []), JSON.stringify(run.logs || []), JSON.stringify(run.artifacts || []),
+        run.phase)
+      .run();
+    return;
+  }
   await db.prepare(`INSERT INTO runs
     (id, run_id, engine, workflow, job_id, started_at, duration_sec, status,
      failure_reason, github_url, steps, logs, artifacts)
@@ -145,11 +166,19 @@ export async function insertRun(db, run) {
     .run();
 }
 
+/** Most recent run rows for a job (newest first), optionally one phase. */
+export async function runsForJob(db, jobId, phase) {
+  const { results } = await db.prepare('SELECT * FROM runs WHERE job_id = ? ORDER BY started_at DESC LIMIT 20')
+    .bind(jobId).all();
+  return results.map(rowToRun).filter((r) => !phase || (r.phase || 'draft') === phase);
+}
+
 export async function updateRun(db, id, patch) {
   const sets = [], args = [];
   for (const [k, col] of Object.entries({
     runId: 'run_id', status: 'status', failureReason: 'failure_reason',
     durationSec: 'duration_sec', githubUrl: 'github_url', startedAt: 'started_at',
+    phase: 'phase', jobId: 'job_id',
   })) {
     if (patch[k] !== undefined) { sets.push(`${col} = ?`); args.push(patch[k]); }
   }
@@ -168,6 +197,30 @@ export async function recordUpload(db, { topicKey: key, youtubeId, jobId, idempo
 
 export async function findUploadByKey(db, key) {
   return db.prepare('SELECT * FROM uploads WHERE topic_key = ? ORDER BY at DESC LIMIT 1').bind(key).first();
+}
+
+/** Start of the current UTC day as ISO (all stored timestamps are UTC ISO). */
+export function utcDayStartIso(now = Date.now()) {
+  const d = new Date(now);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
+}
+
+/**
+ * Daily-cap usage: jobs PUBLISHED since 00:00 UTC today + jobs UPLOADING that
+ * started within the last 6 h (older uploads are stale and are reconciled, so
+ * they can never hold the cap forever). Counted per job, not per video.
+ */
+export async function capUsage(db, now = Date.now()) {
+  const dayStart = utcDayStartIso(now);
+  const pub = await db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status = 'published' AND published_at >= ?")
+    .bind(dayStart).first();
+  const sixH = now - 6 * 3600e3;
+  const { results } = await db.prepare("SELECT uploading_since, updated_at FROM jobs WHERE status = 'uploading'").all();
+  const uploading = (results || []).filter((r) => {
+    const t = r.uploading_since ? Number(r.uploading_since) : Date.parse(r.updated_at || '') || 0;
+    return t >= sixH;
+  }).length;
+  return { published: Number(pub?.n || 0), uploading, total: Number(pub?.n || 0) + uploading, dayStart };
 }
 
 export async function uploadsOnDate(db, dateStr) {
@@ -215,6 +268,8 @@ export async function getSettings(db) {
   const { results } = await db.prepare('SELECT key, value FROM settings').all();
   const out = structuredClone(DEFAULT_SETTINGS);
   for (const r of results) {
+    // Login-throttle rows are not settings (and must never reach a response).
+    if (String(r.key).startsWith('throttle:')) continue;
     try {
       const path = r.key.split('.');
       let node = out;

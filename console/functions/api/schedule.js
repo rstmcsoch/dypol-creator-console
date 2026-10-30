@@ -1,12 +1,12 @@
 import { json, readBody, TZ } from './_lib/util.js';
 import { getSettings, saveSettings, addActivity } from './_lib/db.js';
-import { splitRepo, updateRepoFile } from './_lib/github.js';
+import { splitRepo, updateRepoFile, integrationRef } from './_lib/github.js';
 
 /**
  * POST /api/schedule — publishing window, daily cap, pause/resume, frequency.
  *
  * AUDIT: "pause" now ENFORCES behaviour instead of only changing a badge:
- * a dypol-control.json file is written to BOTH engine forks (via the GitHub
+ * a dypol-control.json file is written to BOTH engine forks on dypol-integration (never main) (via the GitHub
  * contents API). The engine workflows read it as their first step and exit
  * early when schedule_enabled=false on scheduled runs. Manual dashboard runs
  * remain possible (force), matching the documented semantics:
@@ -50,7 +50,7 @@ export async function onRequestPost(context) {
       if (!slug) continue;
       try {
         await updateRepoFile(context.env.GITHUB_TOKEN, {
-          ...splitRepo(slug), path: 'dypol-control.json', content: control,
+          ...splitRepo(slug), path: 'dypol-control.json', content: control, branch: integrationRef(settings),
           message: `DYPOL: ${patch.schedule.automationPaused ? 'pause' : 'resume'} scheduled automation`,
         });
         results.push(`${id}: control file updated`);

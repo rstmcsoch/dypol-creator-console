@@ -1,7 +1,15 @@
-import { json, readBody, nowIso } from '../../_lib/util.js';
+import { json } from '../../_lib/util.js';
 import { getJob, updateJob, appendLog, addActivity, getSettings } from '../../_lib/db.js';
+import { publishJob } from '../../_lib/publish.js';
 
-/** POST /api/jobs/:id/approve — approval gate; schedules for the next window. */
+/**
+ * POST /api/jobs/:id/approve — ONE tap: approve AND publish.
+ * The reviewer's explicit tap (behind a confirmation dialog in the UI) is the
+ * approval; the publish then runs through the same safeguards as Publish
+ * (dedupe, daily cap, lock, visibility from Settings). If a safeguard blocks
+ * the upload, the job stays approved and the reason is returned.
+ * body.publish === false approves only.
+ */
 export async function onRequestPost(context) {
   const db = context.env.DB;
   const job = await getJob(db, context.params.id);
@@ -12,20 +20,26 @@ export async function onRequestPost(context) {
   if (job.quality?.duplicate?.state === 'failed') {
     return json(null, 409, { error: 'Approval blocked — duplicate check failed for this video.', code: 'duplicate' });
   }
-  const body = await readBody(context.request);
+  let body = {};
+  try { body = await context.request.json(); } catch { body = {}; }
   const settings = await getSettings(db);
-  const when = body.when || new Date(Date.now() + 3600e3).toISOString();
 
-  await updateJob(db, job.id, {
-    status: 'scheduled', stage: 'Approved — awaiting publish window', scheduledFor: when,
-  });
+  await updateJob(db, job.id, { status: 'approved', stage: 'Approved', scheduledFor: null });
   await appendLog(db, job, {
-    ts: new Date().toLocaleTimeString('en-GB'), level: 'ok',
-    msg: `Approved — scheduled for ${when} (visibility=${settings.publishing.visibility})`,
+    ts: new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata' }), level: 'ok',
+    msg: `Approved by reviewer (visibility=${settings.publishing.visibility})`,
   });
   await addActivity(db, { icon: 'check', tone: 'green', title: 'Video approved', sub: job.title });
-  return json(null, 200, {
-    ok: true,
-    message: `Approved. Scheduled for ${new Date(when).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST.`,
-  });
+  if (body.publish === false) {
+    return json(null, 200, { ok: true, approved: true, message: 'Approved. Tap Publish when ready.' });
+  }
+
+  const pub = await publishJob(db, context.env, settings, await getJob(db, job.id));
+  if (pub.status >= 400) {
+    return json(null, 200, {
+      ok: true, approved: true, published: false, code: pub.body.code,
+      message: `Approved, but the upload did not start: ${pub.body.error}`,
+    });
+  }
+  return json(null, pub.status, { ...pub.body, approved: true, published: pub.status === 202 || pub.status === 200 });
 }

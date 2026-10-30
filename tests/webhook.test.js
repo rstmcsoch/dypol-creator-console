@@ -234,7 +234,7 @@ test('workflow_run + workflow_job: link, live steps, failing step marks job fail
   assert.equal(r.data.currentStep, 'Generate script');
   job = await dbm.getJob(env.DB, 'job-abc123');
   assert.equal(job.status, 'running');
-  assert.equal(job.stage, 'Running: Generate script');
+  assert.equal(job.stage, 'Working — Generate script');
   assert.equal(job.currentStep, 'Generate script');
   assert.equal(job.progress, 33);
 
@@ -262,7 +262,8 @@ test('workflow_run + workflow_job: link, live steps, failing step marks job fail
   job = await dbm.getJob(env.DB, 'job-abc123');
   assert.equal(job.status, 'failed');
   assert.match(job.error, /Render video/);
-  assert.equal(job.stage, 'Failed: Render video');
+  assert.equal(job.stage, 'Failed — Video render failed');
+  assert.equal(job.errorCategory, 'render');
 
   // a late in_progress delivery must not regress the stored step
   await deliver(env, 'workflow_job', wjPayload('in_progress', [

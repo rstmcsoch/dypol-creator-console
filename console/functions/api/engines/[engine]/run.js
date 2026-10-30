@@ -1,7 +1,7 @@
 import { json, readBody, uid, nowIso } from '../../_lib/util.js';
-import { getSettings, insertJob, insertRun, addActivity, listJobs } from '../../_lib/db.js';
+import { getSettings, insertJob, addActivity, listJobs, getJob } from '../../_lib/db.js';
 import { findDuplicate, classifyError, buildQuality, ERROR_CATEGORIES } from '../../_lib/safeguards.js';
-import { splitRepo, dispatchWorkflow } from '../../_lib/github.js';
+import { dispatchForJob } from '../../_lib/jobflow.js';
 
 /**
  * POST /api/engines/:engine/run  { topic?, phase? }
@@ -92,7 +92,7 @@ export async function onRequestPost(context) {
     title: title || `${engine === 'gemini' ? 'Gemini Automation' : 'Verticals v3'} run ${new Date().toLocaleString('en-IN')}`,
     topic: title || null, niche: body.niche || settings.defaults.niche || 'general',
     format: engine === 'gemini' ? 'long-form' : 'short',
-    status: 'dispatched', stage: 'workflow_dispatch sent', progress: null,
+    status: 'dispatched', stage: 'Sent to engine', progress: null,
     description: '', tags: [], durationSec: null, thumbnail: null,
     createdAt: nowIso(), updatedAt: nowIso(), scheduledFor: null, publishedAt: null,
     youtubeId: null, youtubeUrl: null, error: null, errorCategory: null, errorRetryable: null,
@@ -106,44 +106,31 @@ export async function onRequestPost(context) {
   };
   await insertJob(db, job);
 
+  let dispatched;
   try {
-    await dispatchWorkflow(context.env.GITHUB_TOKEN, {
-      ...splitRepo(slug), workflowFile: workflow, ref: settings.github.branch || 'dypol-integration',
-      inputs: { ...inputs, job_id: job.id },
-    });
+    dispatched = await dispatchForJob({ db, env: context.env, settings, job, phase, inputs });
   } catch (err) {
     const cat = classifyError(err.message);
     job.status = 'failed';
-    job.stage = 'workflow_dispatch failed';
+    job.stage = 'Could not start';
     job.error = `GitHub workflow dispatch failed (${cat.category}): ${err.message}`;
     job.errorCategory = cat.category;
     job.errorRetryable = cat.retryable;
     job.updatedAt = nowIso();
     job.logs.push({ ts: new Date().toLocaleTimeString('en-GB'), level: 'error', msg: job.error });
-    // Persist a visible failed job rather than losing the record after the
-    // database row was created. The request remains an honest 502 response.
     const { updateJob } = await import('../../_lib/db.js');
-    await updateJob(db, job.id, job);
+    const { runId: _ignored, ...rest } = job;
+    await updateJob(db, job.id, rest);
     return json(null, 502, {
       error: job.error, code: 'github', category: cat.category, retryable: cat.retryable,
       jobId: job.id,
     });
   }
-
-  const run = {
-    id: uid('run'), runId: null, engine, workflow, jobId: job.id,
-    startedAt: nowIso(), durationSec: null, status: 'in-progress',
-    failureReason: null, errorCategory: null,
-    githubUrl: `https://github.com/${slug}/actions`,
-    steps: [{ name: 'workflow_dispatch', status: 'done' }],
-    logs: job.logs.slice(), artifacts: [],
-    demo: false,
-  };
-  await insertRun(db, run);
+  const run = { id: dispatched.runRowId };
   await addActivity(db, { icon: 'run', tone: 'blue', title: 'Run started', sub: `${job.title} · ${engine}` });
 
   return json(null, 202, {
-    ok: true, jobId: job.id, runId: run.id,
+    ok: true, jobId: job.id, runId: run.id, ghRunId: dispatched.ghRunId || null,
     message: `Dispatched ${slug}/${workflow} (${phase} phase). Status will sync from GitHub Actions.`
       + (demoted ? ' Note: “full” was demoted to “draft” — review-required mode blocks single-run uploads.' : ''),
     demoted: demoted || undefined,

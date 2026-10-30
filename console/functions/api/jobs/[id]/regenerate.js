@@ -1,42 +1,43 @@
 import { json, readBody, uid, nowIso } from '../../_lib/util.js';
 import { getJob, updateJob, appendLog, insertJob, addActivity, getSettings } from '../../_lib/db.js';
-import { findDuplicate, classifyError, buildQuality } from '../../_lib/safeguards.js';
-import { splitRepo, dispatchWorkflow } from '../../_lib/github.js';
+import { classifyError, buildQuality } from '../../_lib/safeguards.js';
+import { dispatchForJob } from '../../_lib/jobflow.js';
+
+/** Max reviewer feedback sent as a workflow input (full note stays in D1). */
+export const FEEDBACK_INPUT_MAX = 1500;
 
 /**
- * POST /api/jobs/:id/regenerate — dispatch a NEW generation job linked to the
- * original (parent_job_id + attempt), preserving full attempt history instead
- * of wiping the original's state (audit defect: the old code overwrote status,
- * error and logs in place).
+ * POST /api/jobs/:id/regenerate { feedback? } — dispatch a NEW generation job
+ * linked to the original (parent_job_id + attempt) through the shared dispatch
+ * helper (run row first, GitHub run id stored). Reviewer feedback (reject
+ * reason, or body.feedback) is stored on the new job and passed as the
+ * `reviewer_feedback` input ONLY if the engine workflow declares it.
  */
 export async function onRequestPost(context) {
   const db = context.env.DB;
   const original = await getJob(db, context.params.id);
   if (!original) return json(null, 404, { error: 'Job not found.', code: 'not-found' });
-
+  if (['published', 'uploading'].includes(original.status)) {
+    return json(null, 409, { error: 'Published or uploading videos cannot be regenerated — create a new topic instead.', code: 'state' });
+  }
   const settings = await getSettings(db);
   if (settings.schedule.automationPaused) {
     return json(null, 409, { error: 'Automation is paused. Resume scheduling before regenerating.', code: 'paused' });
   }
-  const slug = settings.github[original.engine]?.repo;
-  const workflow = settings.github[original.engine]?.workflow;
-  if (!context.env.GITHUB_TOKEN || !slug) {
-    return json(null, 409, { error: 'Engine not configured for dispatch.', code: 'not-configured' });
-  }
+  const body = await readBody(context.request);
+  const feedback = String(body.feedback || original.reviewNote || '').trim();
 
-  // A regeneration is an INTENTIONAL re-attempt of the same topic — dedupe
-  // must not block it, but the active sibling attempt is superseded first.
   const child = {
     id: uid('job'), engine: original.engine,
     title: original.title, topic: original.topic || original.title,
     niche: original.niche, format: original.format,
-    status: 'dispatched', stage: 'Regeneration dispatched', progress: null,
+    status: 'dispatched', stage: 'Redo sent to engine', progress: null,
     description: original.description, tags: [...(original.tags || [])],
     durationSec: null, thumbnail: null,
     createdAt: nowIso(), updatedAt: nowIso(), scheduledFor: null, publishedAt: null,
     youtubeId: null, youtubeUrl: null, error: null,
     errorCategory: null, errorRetryable: null,
-    quality: buildQuality(original, { oauthConfigured: false }),
+    quality: buildQuality(original, {}),
     logs: [{
       ts: new Date().toLocaleTimeString('en-GB'), level: 'info',
       msg: `Regeneration attempt ${(original.attempt || 1) + 1} — parent job ${original.id}`,
@@ -44,23 +45,42 @@ export async function onRequestPost(context) {
     runId: null, parentJobId: original.id, attempt: (original.attempt || 1) + 1,
     publishBlocked: null, duplicateOf: null, demo: false,
   };
+  await insertJob(db, child);
+  if (feedback) await updateJob(db, child.id, { reviewNote: `Feedback from previous attempt: ${feedback}` });
 
+  let result;
   try {
-    await dispatchWorkflow(context.env.GITHUB_TOKEN, {
-      ...splitRepo(slug), workflowFile: workflow, ref: settings.github.branch || 'dypol-integration',
+    result = await dispatchForJob({
+      db, env: context.env, settings, job: child, phase: 'draft',
       inputs: {
-        phase: 'draft', topic: child.topic, job_id: child.id,
+        topic: child.topic,
         privacy: settings.publishing.visibility,
+        language: settings.defaults?.language || 'en',
+        review_required: settings.publishing.reviewRequired ? '1' : '0',
+        auto_publish: settings.publishing.autoPublish ? '1' : '0',
         title_override: child.title,
         description_override: (child.description || '').slice(0, 480),
+        ...(child.engine === 'verticals' ? { niche: child.niche || 'tech' } : {}),
+        ...(feedback ? { reviewer_feedback: feedback.slice(0, FEEDBACK_INPUT_MAX) } : {}),
       },
     });
   } catch (err) {
     const cat = classifyError(err.message);
-    return json(null, 502, { error: `Regenerate dispatch failed (${cat.category}): ${err.message}`, code: 'github' });
+    await updateJob(db, child.id, {
+      status: 'failed', stage: 'Could not start', error: `Regenerate dispatch failed (${cat.category}): ${err.message}`,
+      errorCategory: cat.category, errorRetryable: cat.retryable,
+    });
+    return json(null, 502, { error: `Regenerate dispatch failed (${cat.category}): ${err.message}`, code: 'github', jobId: child.id });
   }
 
-  await insertJob(db, child);
+  const feedbackSent = !!feedback && !result.stripped.includes('reviewer_feedback');
+  if (feedback) {
+    await appendLog(db, await getJob(db, child.id), {
+      ts: new Date().toLocaleTimeString('en-GB'), level: feedbackSent ? 'ok' : 'warn',
+      msg: feedbackSent ? 'Reviewer feedback sent to the engine (reviewer_feedback input)'
+        : 'Reviewer feedback saved here but NOT sent — the engine workflow has no reviewer_feedback input yet',
+    });
+  }
   if (!['published', 'rejected'].includes(original.status)) {
     await updateJob(db, original.id, { status: 'superseded', stage: `Superseded by attempt ${child.attempt}` });
   }
@@ -71,7 +91,8 @@ export async function onRequestPost(context) {
   await addActivity(db, { icon: 'refresh', tone: 'blue', title: 'Regeneration dispatched', sub: `${original.title} · attempt ${child.attempt}` });
 
   return json(null, 202, {
-    ok: true, jobId: child.id, attempt: child.attempt,
-    message: `Regeneration dispatched as attempt ${child.attempt}. The earlier attempt remains in history.`,
+    ok: true, jobId: child.id, attempt: child.attempt, ghRunId: result.ghRunId, feedbackSent,
+    message: `Redo started as attempt ${child.attempt}.`
+      + (feedback && !feedbackSent ? ' Your feedback is saved but the engine cannot read it yet.' : ''),
   });
 }

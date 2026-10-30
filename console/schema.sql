@@ -32,7 +32,12 @@ CREATE TABLE IF NOT EXISTS jobs (
   attempt       INTEGER DEFAULT 1,
   publish_blocked TEXT,
   duplicate_of  TEXT,
-  current_step  TEXT
+  current_step  TEXT,
+  publish_run_id TEXT,
+  uploading_since INTEGER,
+  review_note   TEXT,
+  videos        TEXT,
+  error_log     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
@@ -57,7 +62,8 @@ CREATE TABLE IF NOT EXISTS runs (
   conclusion     TEXT,
   current_step   TEXT,
   completed_at   TEXT,
-  updated_at     TEXT
+  updated_at     TEXT,
+  phase          TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC);
@@ -129,4 +135,11 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
   id          TEXT PRIMARY KEY,
   event       TEXT,
   received_at TEXT NOT NULL
+);
+
+-- Login throttle keyed by a salted SHA-256 of the client IP (no raw IPs stored).
+CREATE TABLE IF NOT EXISTS login_throttle (
+  key_hash   TEXT PRIMARY KEY,
+  attempts   TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
 );

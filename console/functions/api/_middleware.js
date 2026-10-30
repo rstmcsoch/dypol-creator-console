@@ -10,6 +10,7 @@
  * header (CSRF defence-in-depth on top of SameSite=Strict cookies).
  */
 import { json, verifySessionToken, cookieHeader } from './_lib/util.js';
+import { ensureProgressSchema } from './_lib/webhook.js';
 
 export async function onRequest(context) {
   const request = context.request;
@@ -46,6 +47,10 @@ export async function onRequest(context) {
     if (!valid) {
       return json(null, 401, { error: 'Sign in required.', code: 'auth' });
     }
+  }
+  // Idempotent, cached per isolate: new columns exist before any handler runs.
+  if (context.env?.DB) {
+    try { await ensureProgressSchema(context.env.DB); } catch { /* handler reports DB errors */ }
   }
   return context.next();
 }

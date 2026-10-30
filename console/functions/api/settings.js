@@ -1,5 +1,6 @@
 import { json, readBody, TZ } from './_lib/util.js';
 import { getSettings, saveSettings } from './_lib/db.js';
+import { checkToken } from './_lib/github.js';
 
 /**
  * GET/PUT /api/settings.
@@ -17,16 +18,39 @@ const DEFAULTS_EXTRA = {
   orchestrationExtra: {},
 };
 
+let tokenCache = null; // { at, value } — GitHub /user probe, 10 min per isolate
+export function _resetTokenCache() { tokenCache = null; }
+
+/** Last proof that each engine's own credentials work (from real runs). */
+async function engineEvidence(db) {
+  const out = {};
+  for (const engine of ['gemini', 'verticals']) {
+    const pub = await db.prepare("SELECT published_at FROM jobs WHERE engine = ? AND status = 'published' AND published_at IS NOT NULL ORDER BY published_at DESC LIMIT 1")
+      .bind(engine).first().catch(() => null);
+    const draft = await db.prepare("SELECT COALESCE(completed_at, started_at) AS t FROM runs WHERE engine = ? AND status = 'completed' ORDER BY started_at DESC LIMIT 1")
+      .bind(engine).first().catch(() => null);
+    out[engine] = { lastUpload: pub?.published_at || null, lastSuccessfulRun: draft?.t || null };
+  }
+  return out;
+}
+
 export async function onRequestGet(context) {
   const env = context.env;
   const settings = await getSettings(env.DB);
   settings.github.tokenConfigured = !!env.GITHUB_TOKEN;
 
-  // YouTube connection state machine (never "connected" on file presence alone).
-  const hasClient = !!env.YOUTUBE_CLIENT_SECRET_B64;
-  const hasToken = !!env.YOUTUBE_TOKEN_B64;
+  if (!tokenCache || Date.now() - tokenCache.at > 600000) {
+    tokenCache = { at: Date.now(), value: await checkToken(env.GITHUB_TOKEN) };
+  }
+  const token = tokenCache.value;
+  const evidence = await engineEvidence(env.DB);
+  const lastUpload = [evidence.gemini.lastUpload, evidence.verticals.lastUpload].filter(Boolean).sort().pop() || null;
+
+  // YouTube OAuth is held by the engine repos; the console can only report
+  // what the last successful upload proved — never a false "Missing".
   settings.youtube = {
-    state: !hasClient || !hasToken ? 'missing-credentials' : 'configured-untested',
+    state: lastUpload ? 'verified-by-upload' : 'held-by-engine',
+    lastUpload,
     channelName: env.YOUTUBE_CHANNEL_NAME || null,
   };
 
@@ -35,11 +59,15 @@ export async function onRequestGet(context) {
     health: {
       mode: 'live',
       db: await env.DB.prepare('SELECT 1').first().then(() => 'ok').catch(() => 'error'),
-      github: env.GITHUB_TOKEN ? 'configured' : 'missing',
+      github: env.GITHUB_TOKEN ? (token.ok ? 'valid' : 'invalid') : 'missing',
       githubToken: !!env.GITHUB_TOKEN,
-      geminiKey: !!env.GEMINI_API_KEY,
-      youtubeOAuth: hasClient && hasToken,
+      githubTokenValid: !!token.ok,
+      githubTokenMessage: token.message,
+      githubTokenExpiresAt: token.expiresAt || null,
+      webhookSecret: !!env.GITHUB_WEBHOOK_SECRET,
+      engines: evidence,
       youtubeState: settings.youtube.state,
+      youtubeLastUpload: lastUpload,
       youtubeAnalytics: !!(env.YOUTUBE_ANALYTICS_TOKEN_B64 || env.YOUTUBE_OAUTH_REFRESH_TOKEN),
       channelName: env.YOUTUBE_CHANNEL_NAME || null,
     },

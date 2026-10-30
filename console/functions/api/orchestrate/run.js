@@ -1,7 +1,7 @@
 import { json, readBody, uid, nowIso } from '../_lib/util.js';
-import { getSettings, insertJob, insertRun, addActivity, listJobs } from '../_lib/db.js';
+import { getSettings, insertJob, addActivity, listJobs } from '../_lib/db.js';
 import { findDuplicate, classifyError, buildQuality } from '../_lib/safeguards.js';
-import { splitRepo, dispatchWorkflow } from '../_lib/github.js';
+import { dispatchForJob } from '../_lib/jobflow.js';
 
 /**
  * POST /api/orchestrate/run { topic?, forceMode? } — mode-aware dual-engine dispatch.
@@ -73,36 +73,28 @@ export async function onRequestPost(context) {
     };
     await insertJob(db, job);
     try {
-      await dispatchWorkflow(context.env.GITHUB_TOKEN, {
-        ...splitRepo(slug), workflowFile: workflow, ref: settings.github.branch || 'dypol-integration',
+      await dispatchForJob({
+        db, env: context.env, settings, job, phase,
         inputs: {
-          phase, ...(title ? { topic: title } : {}),
+          ...(title ? { topic: title } : {}),
           privacy: settings.publishing.visibility,
-          job_id: job.id,
+          language: settings.defaults?.language || 'en',
           review_required: settings.publishing.reviewRequired ? '1' : '0',
           auto_publish: settings.publishing.autoPublish ? '1' : '0',
           title_override: title || '',
+          ...(engine === 'verticals' ? { niche: String(body.niche || settings.defaults.niche || 'tech') } : {}),
         },
       });
     } catch (err) {
       const cat = classifyError(err.message);
-      job.status = 'failed';
-      job.stage = 'workflow_dispatch failed';
-      job.error = `GitHub workflow dispatch failed (${cat.category}): ${err.message}`;
-      job.errorCategory = cat.category;
-      job.errorRetryable = cat.retryable;
-      job.updatedAt = nowIso();
-      job.logs.push({ ts: new Date().toLocaleTimeString('en-GB'), level: 'error', msg: job.error });
       const { updateJob } = await import('../_lib/db.js');
-      await updateJob(db, job.id, job);
+      await updateJob(db, job.id, {
+        status: 'failed', stage: 'Could not start',
+        error: `GitHub workflow dispatch failed (${cat.category}): ${err.message}`,
+        errorCategory: cat.category, errorRetryable: cat.retryable,
+      });
       throw err;
     }
-    await insertRun(db, {
-      id: uid('run'), runId: null, engine, workflow, jobId: job.id,
-      startedAt: nowIso(), durationSec: null, status: 'in-progress',
-      failureReason: null, githubUrl: `https://github.com/${slug}/actions`,
-      steps: [{ name: 'workflow_dispatch', status: 'done' }], logs: job.logs, artifacts: [],
-    });
     return job;
   };
 

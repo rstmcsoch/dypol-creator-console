@@ -21,10 +21,11 @@ export async function onRequestGet(context) {
   job.publishBlocked = gate.ok ? null : gate.error;
 
   // Honest quality checks (computed, not hardcoded).
-  const env = context.env;
+  const lastUp = await db.prepare("SELECT published_at FROM jobs WHERE engine = ? AND status = 'published' AND published_at IS NOT NULL ORDER BY published_at DESC LIMIT 1")
+    .bind(job.engine).first().catch(() => null);
   job.quality = {
     ...buildQuality(job, {
-      oauthConfigured: !!(env.YOUTUBE_CLIENT_SECRET_B64 && env.YOUTUBE_TOKEN_B64),
+      engineVerifiedAt: lastUp?.published_at || null,
       hasArtifact: job.status === 'published' ? true : null,
       durationKnown: job.durationSec ? true : null,
     }),

@@ -9,11 +9,16 @@ const secs = (a, b) => (a ? Math.max(0, Math.round(((b ? Date.parse(b) : Date.no
 export async function buildProgress(db, { job = null, runRow = null } = {}) {
   await ensureProgressSchema(db);
   let run = runRow;
+  // While uploading (and after), show the PUBLISH run's steps.
+  const usePublish = job && job.publishRunId && ['uploading', 'publish_failed', 'published'].includes(job.status);
+  if (!run && usePublish) {
+    run = await db.prepare('SELECT * FROM runs WHERE run_id = ? ORDER BY started_at DESC LIMIT 1').bind(String(job.publishRunId)).first();
+  }
   if (!run && job) {
     run = (job.runId && await db.prepare('SELECT * FROM runs WHERE run_id = ? ORDER BY started_at DESC LIMIT 1').bind(String(job.runId)).first())
       || await db.prepare('SELECT * FROM runs WHERE job_id = ? ORDER BY started_at DESC LIMIT 1').bind(job.id).first();
   }
-  const ghRunId = run?.run_id || job?.runId || null;
+  const ghRunId = run?.run_id || (usePublish ? job.publishRunId : job?.runId) || null;
   const ghJobs = await loadRunJobs(db, ghRunId);
   const summary = summarizeSteps(ghJobs);
   const runStatus = run?.status || null;
@@ -21,7 +26,7 @@ export async function buildProgress(db, { job = null, runRow = null } = {}) {
   const runActive = ['in-progress', 'queued'].includes(runStatus);
   // Poll while the job is in flight (or a publish run is uploading it).
   const active = job
-    ? ACTIVE_JOB_STATUSES.includes(job.status) || (job.status === 'uploading' && runActive)
+    ? ACTIVE_JOB_STATUSES.includes(job.status) || job.status === 'uploading'
     : runActive;
   const done = !active;
   const updatedAt = [run?.updated_at, ...ghJobs.map((j) => j.updated_at)].filter(Boolean).sort().pop() || null;

@@ -1,11 +1,17 @@
 import { json, readBody, uid, nowIso, topicKey } from '../_lib/util.js';
-import { listJobs, insertJob, addActivity, getSettings } from '../_lib/db.js';
+import { listJobs, insertJob, addActivity, getSettings, capUsage } from '../_lib/db.js';
 import { findDuplicate } from '../_lib/safeguards.js';
+import { backgroundReconcile } from '../_lib/jobflow.js';
 
 /** GET /api/jobs — searchable, filterable queue. */
+export const ALL_STATUSES = ['queued', 'dispatched', 'running', 'generating', 'rendering', 'needs-review',
+  'awaiting-review', 'approved', 'scheduled', 'uploading', 'published', 'failed', 'publish_failed', 'cancelled',
+  'rejected', 'superseded'];
+
 export async function onRequestGet(context) {
   const db = context.env.DB;
   const q = new URL(context.request.url).searchParams;
+  backgroundReconcile(context); // throttled stale-job check (never blocks the list)
   const jobs = await listJobs(db, {
     status: q.get('status') || undefined,
     engine: q.get('engine') || undefined,
@@ -17,14 +23,17 @@ export async function onRequestGet(context) {
   });
   const all = await listJobs(db, {});
   const counts = { all: all.length };
-  for (const s of ['queued', 'dispatched', 'running', 'generating', 'rendering', 'approved', 'uploading', 'published', 'failed', 'cancelled', 'rejected', 'superseded']) {
-    counts[s] = all.filter((j) => j.status === s).length;
-  }
+  for (const s of ALL_STATUSES) counts[s] = all.filter((j) => j.status === s).length;
+  // Any comma-joined chip key the UI asks for is the sum of its statuses.
+  counts.byStatus = Object.fromEntries(ALL_STATUSES.map((s) => [s, counts[s]]));
   counts['needs-review'] = all.filter((j) => ['needs-review', 'awaiting-review'].includes(j.status)).length;
   counts['generating,dispatched,running'] = all.filter((j) => ['generating', 'dispatched', 'running'].includes(j.status)).length;
   counts['generating,rendering,uploading,queued'] = all.filter((j) => ['generating', 'rendering', 'uploading', 'queued', 'dispatched', 'running'].includes(j.status)).length;
+  const settings = await getSettings(db);
+  const usage = await capUsage(db);
   return json(null, 200, {
     jobs, counts,
+    cap: { used: usage.total, published: usage.published, uploading: usage.uploading, limit: settings.publishing.dailyCap, resets: '05:30 IST (00:00 UTC)' },
     policyNote: 'All videos require approval before publishing while review-required mode is on. The publish action re-checks duplicates, the daily cap and the upload state server-side.',
   });
 }

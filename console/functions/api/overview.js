@@ -1,6 +1,7 @@
 import { json, TZ } from './_lib/util.js';
 import { listJobs, listRuns, listActivity, getSettings } from './_lib/db.js';
 import { splitRepo, listWorkflowRuns } from './_lib/github.js';
+import { backgroundReconcile } from './_lib/jobflow.js';
 
 /**
  * GET /api/overview — truthful operational summary.
@@ -9,6 +10,7 @@ import { splitRepo, listWorkflowRuns } from './_lib/github.js';
  * workflow success is NOT treated as upload success.
  */
 export async function onRequestGet(context) {
+  backgroundReconcile(context);
   const db = context.env.DB;
   const [jobs, runs, activity, settings] = await Promise.all([
     listJobs(db, {}), listRuns(db), listActivity(db, 8), getSettings(db),

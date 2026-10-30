@@ -17,7 +17,7 @@ export async function onRequestGet(context) {
       const slug = settings.github[id]?.repo;
       if (!slug || settings.engines?.[id]?.enabled === false) continue;
       try {
-        ghRuns[id] = await listWorkflowRuns(token, { ...splitRepo(slug), workflowFile: settings.github[id].workflow });
+        ghRuns[id] = await listWorkflowRuns(token, { ...splitRepo(slug), workflowFile: settings.github[id].workflow, branch: settings.github.branch });
         fetched[id] = true;
       } catch (err) {
         fetchErrors[id] = err.message.slice(0, 120); // engine not reachable — reported honestly

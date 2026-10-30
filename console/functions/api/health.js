@@ -1,8 +1,10 @@
 import { json } from './_lib/util.js';
 
 /**
- * GET /api/health — unauthenticated diagnostics.
- * Reports only booleans about secrets (never values).
+ * GET /api/health — unauthenticated diagnostics. Only what the CONSOLE holds,
+ * as booleans (never values, never network calls from this open route).
+ * Engine credentials (LLM, stock, YouTube OAuth) live in the engine repos and
+ * are verified by successful runs — see the authenticated /api/settings health.
  */
 export async function onRequestGet(context) {
   const env = context.env;
@@ -13,8 +15,8 @@ export async function onRequestGet(context) {
     db,
     github: env.GITHUB_TOKEN ? 'configured' : 'missing',
     githubToken: !!env.GITHUB_TOKEN,
-    geminiKey: !!env.GEMINI_API_KEY,
-    youtubeOAuth: !!(env.YOUTUBE_CLIENT_SECRET_B64 && env.YOUTUBE_TOKEN_B64),
-    youtubeAnalytics: !!env.YOUTUBE_ANALYTICS_TOKEN_B64,
+    webhookSecret: !!env.GITHUB_WEBHOOK_SECRET,
+    sessionSecret: !!env.SESSION_SECRET,
+    engineCredentials: 'held-by-engine',
   });
 }

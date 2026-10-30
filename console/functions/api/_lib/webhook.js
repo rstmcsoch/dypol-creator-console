@@ -19,9 +19,10 @@ import { nowIso } from './util.js';
 import {
   listRuns, insertRun, updateRun, getJob, updateJob, appendLog, addActivity, getSettings,
 } from './db.js';
-import { classifyError, buildQuality } from './safeguards.js';
+import { buildQuality } from './safeguards.js';
 import { splitRepo, getWorkflowRun, listRunJobs } from './github.js';
 import { maybeDispatchFallback } from './fallback.js';
+import { failJob, ingestPublishResult } from './jobflow.js';
 
 /* The only repositories whose events are accepted. Settings may override the
  * slug → engine mapping, but a repo outside this allowlist is always ignored. */
@@ -31,7 +32,16 @@ export const ENGINE_REPOS = {
 };
 
 export const ACTIVE_JOB_STATUSES = ['dispatched', 'running', 'generating', 'rendering'];
-const PROTECTED_JOB_STATUSES = ['published', 'superseded', 'rejected', 'uploading', 'cancelled'];
+// Protected from DRAFT-run events only. Publish-run events are always applied
+// (see applyPublish) — 'uploading' is exactly when the console needs them.
+const PROTECTED_JOB_STATUSES = ['published', 'superseded', 'rejected', 'uploading', 'publish_failed', 'cancelled'];
+
+/** True when this local run row is the job's publish run. */
+export function isPublishRun(local, job) {
+  if (!local) return false;
+  if (local.phase === 'publish') return true;
+  return !!(job?.publishRunId && local.runId && String(job.publishRunId) === String(local.runId));
+}
 const TERMINAL_RUN = ['completed', 'failed', 'cancelled'];
 
 /* ---------------- Signature verification ---------------- */
@@ -196,15 +206,25 @@ export const PROGRESS_SCHEMA = [
   'CREATE INDEX IF NOT EXISTS idx_job_steps_run ON job_steps(gh_run_id)',
   `CREATE TABLE IF NOT EXISTS webhook_deliveries (
     id TEXT PRIMARY KEY, event TEXT, received_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS login_throttle (
+    key_hash TEXT PRIMARY KEY, attempts TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
+  // Pre-fix builds stored raw client IPs as settings rows — drop them.
+  "DELETE FROM settings WHERE key LIKE 'throttle:%'",
 ];
 const ADD_COLUMNS = {
-  runs: [['conclusion', 'TEXT'], ['current_step', 'TEXT'], ['completed_at', 'TEXT'], ['updated_at', 'TEXT']],
-  jobs: [['current_step', 'TEXT']],
+  runs: [['conclusion', 'TEXT'], ['current_step', 'TEXT'], ['completed_at', 'TEXT'], ['updated_at', 'TEXT'],
+    ['phase', 'TEXT']],
+  jobs: [['current_step', 'TEXT'], ['publish_run_id', 'TEXT'], ['uploading_since', 'INTEGER'],
+    ['review_note', 'TEXT'], ['videos', 'TEXT'], ['error_log', 'TEXT']],
 };
 
 export async function ensureProgressSchema(db, { force = false } = {}) {
   if (schemaReady && !force) return;
-  for (const sql of PROGRESS_SCHEMA) await db.prepare(sql).run();
+  for (const sql of PROGRESS_SCHEMA) {
+    try { await db.prepare(sql).run(); } catch (err) {
+      if (!/^DELETE/.test(sql)) throw err; // cleanup of legacy rows is best-effort
+    }
+  }
   for (const [table, cols] of Object.entries(ADD_COLUMNS)) {
     const { results } = await db.prepare(`PRAGMA table_info(${table})`).all();
     const have = new Set((results || []).map((r) => r.name));
@@ -299,17 +319,48 @@ const logTs = () => new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kol
  * Apply a console run status to the linked job (same transitions as sync).
  * Returns a short description of what changed.
  */
-async function applyToJob(db, env, settings, local, status, { failure, currentStep, progress } = {}) {
+async function applyPublish(db, env, settings, local, job, status, { failure, currentStep, completedAt, ghJobId } = {}) {
+  if (['published', 'superseded', 'rejected', 'cancelled'].includes(job.status)) return null;
+  const ghRunId = local.runId;
+  if (status === 'queued' || status === 'in-progress') {
+    if (job.status !== 'uploading') return null;
+    await updateJob(db, job.id, {
+      stage: currentStep ? `Uploading — ${currentStep}` : status === 'queued' ? 'Upload waiting to start' : 'Uploading to YouTube…',
+      ...(job.publishRunId ? {} : { publishRunId: String(ghRunId) }),
+    });
+    return 'uploading';
+  }
+  // Already recorded for this run (e.g. workflow_job failure, then workflow_run completed).
+  if (job.status === 'publish_failed' && String(job.publishRunId) === String(ghRunId) && status !== 'completed') return null;
+  if (status === 'completed') {
+    // A publish_failed job is re-checked by the throttled reconciler instead.
+    if (job.status === 'publish_failed' && String(job.publishRunId) === String(ghRunId)) return null;
+    return ingestPublishResult(db, env, settings, job, ghRunId, { completedAt });
+  }
+  if (status === 'failed' || status === 'cancelled') {
+    if (!job.publishRunId) await updateJob(db, job.id, { publishRunId: String(ghRunId) });
+    return failJob(db, env, settings, await getJob(db, job.id), {
+      phase: 'publish', ghRunId, failure, cancelled: status === 'cancelled', ghJobId,
+    });
+  }
+  return null;
+}
+
+async function applyToJob(db, env, settings, local, status, { failure, currentStep, progress, completedAt, ghJobId } = {}) {
   if (!local?.jobId) return null;
   const job = await getJob(db, local.jobId);
-  if (!job || PROTECTED_JOB_STATUSES.includes(job.status)) return null;
+  if (!job) return null;
+  if (isPublishRun(local, job)) {
+    return applyPublish(db, env, settings, local, job, status, { failure, currentStep, completedAt, ghJobId });
+  }
+  if (PROTECTED_JOB_STATUSES.includes(job.status)) return null;
   const active = ACTIVE_JOB_STATUSES.includes(job.status) || job.status === 'queued';
   if (status === 'queued' || status === 'in-progress') {
     if (!active) return null; // never resurrect reviewed/failed jobs from late events
     const running = status === 'in-progress';
     await updateJob(db, job.id, {
       status: running ? 'running' : 'dispatched',
-      stage: currentStep ? `Running: ${currentStep}` : running ? 'Running in GitHub Actions' : 'Queued in GitHub Actions',
+      stage: currentStep ? `Working — ${currentStep}` : running ? 'Working on it' : 'Waiting to start',
       progress: progress ?? null,
       runId: local.runId || undefined,
     });
@@ -319,8 +370,8 @@ async function applyToJob(db, env, settings, local, status, { failure, currentSt
   if (status === 'completed') {
     await updateJob(db, job.id, {
       status: 'needs-review', stage: 'Ready for review', progress: 100,
+      error: null, errorCategory: null, errorRetryable: null, errorLog: null,
       quality: buildQuality(job, {
-        oauthConfigured: !!(env.YOUTUBE_CLIENT_SECRET_B64 && env.YOUTUBE_TOKEN_B64),
         hasArtifact: (local.artifacts || []).length > 0 ? true : null,
         durationKnown: job.durationSec ? true : null,
       }),
@@ -330,14 +381,7 @@ async function applyToJob(db, env, settings, local, status, { failure, currentSt
     return 'needs-review';
   }
   if (status === 'failed') {
-    const cat = classifyError(failure);
-    await updateJob(db, job.id, {
-      status: 'failed', stage: failure ? `Failed: ${failure.replace(/^Step “(.+?)”.*$/, '$1')}` : 'Failed',
-      error: failure, errorCategory: cat.category, errorRetryable: cat.retryable,
-    });
-    await appendLog(db, await getJob(db, job.id), { ts: logTs(), level: 'error', msg: `${failure} (webhook)` });
-    await addActivity(db, { icon: 'alert', tone: 'red', title: 'Run failed', sub: `${job.title} — ${cat.category}` });
-    return 'failed';
+    return failJob(db, env, settings, job, { phase: 'draft', ghRunId: local.runId, failure, ghJobId });
   }
   if (status === 'cancelled') {
     await updateJob(db, job.id, { status: 'cancelled', stage: 'Cancelled', error: 'Run cancelled' });
@@ -377,7 +421,9 @@ export async function handleWorkflowRun(db, env, settings, engine, ghr, { repo }
 
   if (by !== 'run_id') {
     local.runId = ghr.runId;
-    if (local.jobId) await updateJob(db, local.jobId, { runId: ghr.runId });
+    if (local.jobId) {
+      await updateJob(db, local.jobId, local.phase === 'publish' ? { publishRunId: ghr.runId } : { runId: ghr.runId });
+    }
   }
 
   // Never regress a terminal run to non-terminal on out-of-order delivery.
@@ -408,15 +454,21 @@ export async function handleWorkflowRun(db, env, settings, engine, ghr, { repo }
       completedAt: TERMINAL_RUN.includes(status) ? (ghr.updatedAt || nowIso()) : undefined,
     });
   }
+  const jobBefore = local.jobId ? await getJob(db, local.jobId) : null;
+  const publishRun = isPublishRun(local, jobBefore);
   const jobChange = regress ? null : await applyToJob(db, env, settings, local, status, {
     failure, currentStep: summary.current?.step, progress: stepProgress(summary),
+    completedAt: TERMINAL_RUN.includes(status) ? (ghr.updatedAt || nowIso()) : undefined,
   });
   if (local.jobId && summary.current?.step && !regress) await setJobStep(db, local.jobId, summary.current.step);
 
   let fallback = null;
-  if (status === 'failed' && !regress && local.status !== 'failed') {
+  // Mode-1 fallback: only for a DRAFT run that just failed — never after a
+  // publish run (or any job that reached upload), never on replayed history.
+  if (status === 'failed' && !regress && !publishRun && local.status !== 'failed'
+    && (!jobBefore || (!jobBefore.publishRunId && ['failed', ...ACTIVE_JOB_STATUSES, 'queued'].includes(jobBefore.status)))) {
     fallback = await maybeDispatchFallback({
-      db, token: env.GITHUB_TOKEN, settings, engine, local, displayTitle: ghr.displayTitle,
+      db, env, settings, engine, local, displayTitle: ghr.displayTitle, completedAt: ghr.updatedAt,
     });
   }
   return { linked: true, by, runRecord: local.id, status, job: jobChange, failure, fallback: fallback?.message || null };
@@ -459,7 +511,7 @@ export async function handleWorkflowJob(db, env, settings, engine, wj, { repo } 
     // Run status itself flips on the workflow_run 'completed' event (or sync),
     // which also owns the one-time Mode-1 fallback decision.
     await updateRun(db, local.id, { failureReason: failure });
-    jobChange = await applyToJob(db, env, settings, local, 'failed', { failure });
+    jobChange = await applyToJob(db, env, settings, local, 'failed', { failure, ghJobId: String(wj.id) });
   } else if (!TERMINAL_RUN.includes(local.status)) {
     const status = wj.status === 'in_progress' || summary.finished > 0 ? 'in-progress' : 'queued';
     if (status === 'in-progress' && local.status !== 'in-progress') await updateRun(db, local.id, { status });
