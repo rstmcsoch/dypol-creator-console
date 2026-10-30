@@ -143,3 +143,10 @@ CREATE TABLE IF NOT EXISTS login_throttle (
   attempts   TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+-- Quota & health panel cache (refreshed at most every 30 minutes).
+CREATE TABLE IF NOT EXISTS quota_cache (
+  key        TEXT PRIMARY KEY,
+  data       TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);

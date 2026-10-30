@@ -3,6 +3,7 @@
    partial; no fabricated percentages; Run A / Run B / Run Both / History /
    Configure / Refresh all wired to real backend actions. */
 import { api } from '../api.js';
+import { quotaPanelShell, mountQuotaPanel } from '../quota-panel.js';
 import {
   icon, esc, statCard, friendlyStage, statusPill, enginePill, typePill, thumb, fmtDateTime,
   fmtAgo, fmtNum, progressBar, toast, openModal, closeModal, emptyState,
@@ -157,6 +158,8 @@ async function refresh() {
     </div>
     <div class="grid grid--2">${d.engines.map(engineCard).join('')}</div>
 
+    <div style="margin-top:18px">${quotaPanelShell('quota-panel')}</div>
+
     <div class="rail-grid" style="margin-top:26px">
       <div class="stack">
         <div class="card">
@@ -283,6 +286,7 @@ async function refresh() {
   if (runNow) runNow.onclick = runPipelineModal;
   const emptyRun = root.querySelector('#empty-run');
   if (emptyRun) emptyRun.onclick = runPipelineModal;
+  mountQuotaPanel(root, 'quota-panel');
   root.querySelectorAll('[data-open-job]').forEach((row) => {
     row.onclick = () => { location.hash = `#/queue?job=${encodeURIComponent(row.dataset.openJob)}`; };
   });

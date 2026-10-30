@@ -123,7 +123,10 @@ function detailDrawer(j) {
         <a class="btn btn--ghost btn--sm" href="/api/jobs/${encodeURIComponent(j.id)}/media?kind=video" target="_blank" rel="noopener">${icon('external', 'icon--sm')} Open video</a>
         ${j.engine === 'gemini' ? `<a class="btn btn--ghost btn--sm" href="/api/jobs/${encodeURIComponent(j.id)}/media?kind=short" target="_blank" rel="noopener">${icon('external', 'icon--sm')} Open Short</a>` : ''}
         <a class="btn btn--ghost btn--sm" href="/api/jobs/${encodeURIComponent(j.id)}/media?kind=thumb" target="_blank" rel="noopener">${icon('external', 'icon--sm')} Thumbnail</a>
+        <a class="btn btn--ghost btn--sm" href="/api/jobs/${encodeURIComponent(j.id)}/media?kind=video&quality=full&download=1" rel="noopener">${icon('external', 'icon--sm')} Full-quality video</a>
+        ${j.engine === 'gemini' ? `<a class="btn btn--ghost btn--sm" href="/api/jobs/${encodeURIComponent(j.id)}/media?kind=short&quality=full&download=1" rel="noopener">${icon('external', 'icon--sm')} Full-quality Short</a>` : ''}
       </div>
+      <div class="small muted" style="margin-top:4px">The player streams a small preview; review the full-quality file before approving if detail matters.</div>
       <div id="visual-credits" class="small muted" style="margin-top:8px">Loading visual sources…</div>
     </div>` : thumb(j, true)}
     <div class="row row--wrap" style="gap:7px">

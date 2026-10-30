@@ -4,6 +4,7 @@
    mode gates publishing). Connection badges reflect tested state, never
    mere credential presence. */
 import { api } from '../api.js';
+import { quotaPanelShell, mountQuotaPanel } from '../quota-panel.js';
 import { icon, esc, toast, statusPill } from '../ui.js';
 
 const MODES = [
@@ -200,6 +201,7 @@ async function refresh() {
 
       <!-- Right rail: health -->
       <div class="stack rail">
+        ${quotaPanelShell('quota-panel-settings')}
         <div class="card">
           <div class="card__head">${icon('server')}<h2>System health</h2></div>
           <div class="card__body qc">
@@ -335,6 +337,7 @@ async function refresh() {
       toast(label, res.message, res.ok ? 'ok' : 'warn');
     } catch (err) { toast(`${label} failed`, err.message, 'bad'); }
   };
+  mountQuotaPanel(root, 'quota-panel-settings');
   root.querySelector('#btn-test-gh').onclick = () => testTarget('github', 'GitHub connection');
   root.querySelector('#btn-test-yt').onclick = () => testTarget('youtube', 'YouTube connection');
   root.querySelector('#btn-test-gemini').onclick = () => testTarget('gemini', 'Gemini readiness');

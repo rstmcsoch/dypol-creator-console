@@ -830,3 +830,23 @@ svg.icon--lg { width: 22px; height: 22px; }
 .log-tail { max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 11px;
   background: rgba(0,0,0,.04); border-radius: 8px; padding: 8px; margin-top: 6px; }
 .yt-links { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Login: "Keep me signed in" */
+.remember { display: flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink-2, inherit); cursor: pointer; min-height: 44px; }
+.remember input { width: 20px; height: 20px; accent-color: var(--accent); margin: 0; flex: none; }
+.remember .muted { color: var(--ink-3, #888); font-size: 12.5px; }
+
+/* Quota & health panel (phone-first single column) */
+.quota .card__body { display: flex; flex-direction: column; gap: 10px; }
+.qeng { display: flex; flex-direction: column; border-top: 1px solid var(--border); padding-top: 8px; }
+.qeng:first-child { border-top: 0; padding-top: 0; }
+.qeng__title { font-size: 12px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; color: var(--ink-3); padding: 4px 0 2px; }
+.qrow { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 8px 0; min-height: 44px; }
+.qrow .check-dot { margin-top: 1px; }
+.qrow__label { font-size: 14px; font-weight: 600; color: var(--ink, #111); line-height: 1.3; }
+.qrow__sub { font-size: 12px; color: var(--ink-3); line-height: 1.35; overflow-wrap: anywhere; margin-top: 2px; }
+.qrow__value { font-size: 14px; font-weight: 700; white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+.qbar { height: 6px; border-radius: 3px; background: var(--gray-soft, #eef0f3); overflow: hidden; margin-top: 6px; }
+.qbar span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+@media (min-width: 1025px) { .quota .card__body { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px 22px; } .quota .card__body > .tiny, .quota .card__body > .callout { grid-column: 1 / -1; } .qeng:first-child { border-top: 1px solid var(--border); padding-top: 8px; } .qeng { border-top: 1px solid var(--border); } }
+.rail .quota .card__body { display: flex; }

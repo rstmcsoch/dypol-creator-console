@@ -350,9 +350,9 @@ function completeUpload(job) {
 function sign(value) {
   return crypto.createHmac('sha256', SESSION_SECRET).update(value).digest('hex');
 }
-function makeSession() {
+function makeSession(days = 7) {
   const token = crypto.randomBytes(24).toString('hex');
-  db.sessions.set(token, { expiresAt: Date.now() + 12 * 3600e3 });
+  db.sessions.set(token, { expiresAt: Date.now() + days * 86400e3 });
   return token;
 }
 function parseCookies(req) {
@@ -510,12 +510,13 @@ async function handleApi(req, res, url) {
       return json(res, 401, { error: 'Invalid console password.', code: 'auth' });
     }
     loginAttempts.delete(ip); // successful login clears the window
-    const token = makeSession();
+    const days = body.remember === true || body.remember === 'true' ? 30 : 7;
+    const token = makeSession(days);
     res.writeHead(200, {
       'Content-Type': 'application/json',
-      'Set-Cookie': `dypol_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200`,
+      'Set-Cookie': `dypol_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${days * 86400}`,
     });
-    return res.end(JSON.stringify({ ok: true }));
+    return res.end(JSON.stringify({ ok: true, sessionDays: days }));
   }
   if (p === '/api/auth/logout' && method === 'POST') {
     const tok = parseCookies(req).dypol_session;
@@ -527,6 +528,26 @@ async function handleApi(req, res, url) {
 
   if (p === '/api/session') {
     return json(res, 200, { user: 'admin', mode: 'demo', pendingReview: db.jobs.filter((j) => j.status === 'needs-review').length });
+  }
+
+  /* --- quota & health (demo values, clearly labelled) --- */
+  if (p === '/api/quota') {
+    const now = new Date();
+    const eng = (engine) => ({
+      engine, configured: true, enabled: true, demo: true,
+      uploadsToday: { jobs: 0, videos: 0 }, lastUpload: null,
+      oauth: { state: 'unknown', detail: 'Demo mode — no uploads' },
+      flux: { state: 'unknown', detail: 'Demo mode' }, pixabay: { state: 'unknown', detail: 'Demo mode' },
+      judge: { state: 'unknown', detail: 'Demo mode', calls: null }, llmUnavailable7d: 0,
+      storage: { cacheBytes: 0, artifactBytes: 0, artifactCount: 0 }, logsScanned: 0, notes: ['Simulated data'],
+    });
+    return json(res, 200, {
+      demo: true, generatedAt: now.toISOString(), nextRefreshAt: new Date(+now + 1800e3).toISOString(),
+      token: { state: 'unknown', detail: 'Demo mode', expiresAt: null },
+      youtube: { capJobs: 2, usedJobs: 0, videosToday: 0, estUnits: 0, dailyUnits: 10000 },
+      storage: { usedBytes: 0, freeBytes: 500 * 1024 * 1024, pct: 0, state: 'ok' },
+      engines: [eng('gemini'), eng('verticals')], subrequests: { used: 0, limit: 40, skipped: [] }, cached: true, ageSec: 0,
+    });
   }
 
   /* --- overview --- */

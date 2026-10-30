@@ -1,4 +1,4 @@
-import { json, readBody, verifyPassword, createSessionToken, SESSION_COOKIE } from '../_lib/util.js';
+import { json, readBody, verifyPassword, createSessionToken, SESSION_COOKIE, sessionDays } from '../_lib/util.js';
 
 /**
  * POST /api/auth/login — password checked against a PBKDF2 hash secret.
@@ -45,6 +45,8 @@ export async function onRequestPost(context) {
   if (!ok) {
     return json(null, 401, { error: 'Invalid console password.', code: 'auth' });
   }
-  const token = await createSessionToken(context.env.SESSION_SECRET || '', 12);
-  return json(null, 200, { ok: true }, { 'Set-Cookie': SESSION_COOKIE(token) });
+  // "Keep me signed in" = 30 days; otherwise 7 days. Token expiry and cookie Max-Age match.
+  const days = sessionDays(body.remember);
+  const token = await createSessionToken(context.env.SESSION_SECRET || '', days * 24);
+  return json(null, 200, { ok: true, sessionDays: days }, { 'Set-Cookie': SESSION_COOKIE(token, days) });
 }

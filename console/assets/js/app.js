@@ -142,7 +142,8 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
   errBox.hidden = true;
   try {
     const password = document.getElementById('login-password').value;
-    await api.login(password);
+    const remember = !!document.getElementById('login-remember')?.checked;
+    await api.login(password, remember);
     state.session = await api.session();
     document.getElementById('login-password').value = '';
     showApp();

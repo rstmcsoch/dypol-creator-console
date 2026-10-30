@@ -110,7 +110,15 @@ export function cookieHeader(request, name) {
   return null;
 }
 
-export const SESSION_COOKIE = (token) =>
-  `dypol_session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`;
+/** Session lengths: 7 days by default, 30 days with "Keep me signed in". */
+export const SESSION_DAYS_DEFAULT = 7;
+export const SESSION_DAYS_REMEMBER = 30;
+export function sessionDays(remember) {
+  return remember === true || remember === 'true' || remember === 1 || remember === '1' || remember === 'on'
+    ? SESSION_DAYS_REMEMBER : SESSION_DAYS_DEFAULT;
+}
+/** The cookie lives exactly as long as the signed token inside it. */
+export const SESSION_COOKIE = (token, days = SESSION_DAYS_DEFAULT) =>
+  `dypol_session=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${Math.round(days * 86400)}`;
 export const CLEAR_COOKIE =
   'dypol_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0';

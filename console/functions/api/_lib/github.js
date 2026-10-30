@@ -387,3 +387,47 @@ export async function updateRepoFile(token, { owner, repo, path, content, messag
   });
   return true;
 }
+
+/** Authenticated GET on the GitHub REST API (JSON). Throws with .status on errors. */
+export async function ghGet(token, path) {
+  return gh(token, path);
+}
+
+/**
+ * The short-lived storage URL behind an artifact zip (GitHub answers 302).
+ * The URL is pre-signed: it is fetched WITHOUT the Authorization header and
+ * supports HTTP Range, so callers can read single zip entries without
+ * downloading the whole artifact. Returns null when GitHub does not redirect.
+ */
+export async function artifactBlobUrl(token, { owner, repo, artifactId }) {
+  const res = await fetch(`${API}/repos/${owner}/${repo}/actions/artifacts/${artifactId}/zip`, {
+    headers: headers(token), redirect: 'manual',
+  });
+  if (res.status >= 300 && res.status < 400) {
+    return res.headers.get('Location') || res.headers.get('location') || null;
+  }
+  if (!res.ok) {
+    const err = new Error(`Failed to open artifact ${artifactId}: HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  try { await res.body?.cancel(); } catch { /* ignore */ }
+  return null;
+}
+
+/** Full text of one Actions job log ('' when unavailable). Costs 2 subrequests (API + storage). */
+export async function fetchJobLog(token, { owner, repo, jobId }) {
+  if (!jobId) return '';
+  try {
+    let res = await fetch(`${API}/repos/${owner}/${repo}/actions/jobs/${jobId}/logs`, {
+      headers: headers(token), redirect: 'manual',
+    });
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('Location') || res.headers.get('location');
+      if (!loc) return '';
+      res = await fetch(loc, { headers: { 'User-Agent': 'DYPOL-Creator-Console' } });
+    }
+    if (!res.ok) return '';
+    return await res.text();
+  } catch { return ''; }
+}
