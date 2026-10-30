@@ -215,11 +215,10 @@ export async function capUsage(db, now = Date.now()) {
   const pub = await db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status = 'published' AND published_at >= ?")
     .bind(dayStart).first();
   const sixH = now - 6 * 3600e3;
-  const { results } = await db.prepare("SELECT uploading_since, updated_at FROM jobs WHERE status = 'uploading'").all();
-  const uploading = (results || []).filter((r) => {
-    const t = r.uploading_since ? Number(r.uploading_since) : Date.parse(r.updated_at || '') || 0;
-    return t >= sixH;
-  }).length;
+  const { results } = await db.prepare("SELECT uploading_since FROM jobs WHERE status = 'uploading'").all();
+  // Every upload dispatched by this build stamps uploading_since; a row
+  // without it predates the fix and is left to the reconciler (not counted).
+  const uploading = (results || []).filter((r) => r.uploading_since && Number(r.uploading_since) >= sixH).length;
   return { published: Number(pub?.n || 0), uploading, total: Number(pub?.n || 0) + uploading, dayStart };
 }
 

@@ -30,7 +30,9 @@ const ts = () => new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkat
 
 export const DRAFT_ACTIVE = ['dispatched', 'running', 'generating', 'rendering'];
 export const STALE_MS = { dispatched: 5 * 60e3, drafting: 25 * 60e3, uploading: 10 * 60e3 };
-const OK_STATES = ['needs-review', 'awaiting-review', 'approved', 'scheduled', 'uploading', 'published'];
+// 'uploading' is left alone (its errors clear when the upload resolves) so the
+// stale timer for legacy uploads is never reset by this cleanup.
+const OK_STATES = ['needs-review', 'awaiting-review', 'approved', 'scheduled', 'published'];
 
 function engineGh(settings, engine) {
   const slug = settings.github?.[engine]?.repo;
@@ -271,7 +273,7 @@ export async function reconcileJobs(db, env, settings, { force = false, now = Da
 
   // Clear stale error categories left on jobs that later succeeded.
   for (const j of jobs) {
-    if (OK_STATES.includes(j.status) && (j.errorCategory || (j.error && j.status !== 'uploading'))) {
+    if (OK_STATES.includes(j.status) && (j.errorCategory || j.error)) {
       await updateJob(db, j.id, { error: null, errorCategory: null, errorRetryable: null, errorLog: null });
     }
   }

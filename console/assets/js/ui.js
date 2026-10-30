@@ -225,15 +225,15 @@ export function barChart(values, { height = 190, labels = [], valueFmt = fmtNum,
 }
 
 /* ---------------- Overlays ---------------- */
-export function toast(title, message = '', kind = '') {
+export function toast(title, message = '', kind = '', ms = 4200) {
   const root = document.getElementById('toasts');
   const el = document.createElement('div');
   el.className = `toast ${kind ? `toast--${kind}` : ''}`;
   el.innerHTML = `<span>${icon(kind === 'bad' ? 'alert' : kind === 'ok' ? 'check' : 'info')}</span>
     <div><strong>${esc(title)}</strong>${message ? `<div>${esc(message)}</div>` : ''}</div>`;
   root.appendChild(el);
-  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; }, 4200);
-  setTimeout(() => el.remove(), 4700);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; }, ms);
+  setTimeout(() => el.remove(), ms + 500);
 }
 
 export function openDrawer({ title, body, foot = '' }) {

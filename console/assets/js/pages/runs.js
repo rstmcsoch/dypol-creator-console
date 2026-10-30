@@ -148,12 +148,18 @@ async function refresh() {
       } catch (err) { toast('Retry failed', err.message, 'bad'); }
     };
   });
-  root.querySelector('#btn-sync').onclick = async () => {
+  root.querySelector('#btn-sync').onclick = async (e) => {
+    const b = e.currentTarget;
+    b.disabled = true;
+    b.textContent = 'Syncing with GitHub…';
     try {
       const res = await api.syncGithub();
-      toast('Sync complete', res.message, 'ok');
       await refresh();
-    } catch (err) { toast('Sync failed', err.message, 'bad'); }
+      toast('Sync complete', res.message, 'ok', 10000);
+    } catch (err) {
+      b.disabled = false;
+      toast('Sync failed', err.message, 'bad', 10000);
+    }
   };
 }
 

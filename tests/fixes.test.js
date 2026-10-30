@@ -317,6 +317,7 @@ test('P0-3: daily cap = published since 00:00 UTC + uploading within 6 h', async
   const now = Date.now();
   await addJob(env, { status: 'published', publishedAt: new Date(now - 30 * 3600e3).toISOString() }); // yesterday
   await addJob(env, { status: 'uploading', uploadingSince: now - 7 * 3600e3 }); // stale
+  await addJob(env, { status: 'uploading', updatedAt: new Date(now).toISOString() }); // legacy row: no uploading_since
   let u = await dbm.capUsage(env.DB, now);
   assert.equal(u.total, 0);
   await addJob(env, { status: 'uploading', uploadingSince: now - 3600e3 });
@@ -505,7 +506,7 @@ test('P2: failure categories', () => {
 
 test('P2: a later success clears stale error categories', async () => {
   const env = await makeEnv();
-  const j = await addJob(env, { status: 'uploading', uploadingSince: Date.now(), errorCategory: 'unknown', error: 'old tags_override error' });
+  const j = await addJob(env, { status: 'needs-review', errorCategory: 'unknown', error: 'old tags_override error' });
   await dbm.updateJob(env.DB, j.id, { errorCategory: 'unknown', error: 'old' });
   route('GET', '/actions/workflows/', { body: { workflow_runs: [] } });
   await flow.reconcileJobs(env.DB, env, await dbm.getSettings(env.DB), { force: true });
