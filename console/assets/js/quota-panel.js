@@ -15,10 +15,17 @@ const dot = (state) => {
   const ic = state === 'ok' ? 'check' : state === 'bad' || state === 'warn' ? 'alert' : 'info';
   return `<span class="check-dot ${cls}" aria-label="${esc(state)}">${icon(ic, 'icon--sm')}</span>`;
 };
+/** Raw provider errors (HTTP bodies, JSON) never reach the screen. */
+const plainDetail = (d) => {
+  let s = String(d || '');
+  const cut = s.search(/\(?HTTP \d{3}|\{"|\{'/);
+  if (cut > -1) s = s.slice(0, cut).trim();
+  return s.replace(/flux quota\/limit hit/i, 'Daily image limit reached').replace(/[\s(:·-]+$/, '');
+};
 const row = (label, value, state, sub = '') => `
   <div class="qrow">
     ${dot(state)}
-    <div class="qrow__main"><div class="qrow__label">${esc(label)}</div>${sub ? `<div class="qrow__sub">${esc(sub)}</div>` : ''}</div>
+    <div class="qrow__main"><div class="qrow__label">${esc(label)}</div>${sub ? `<div class="qrow__sub">${esc(plainDetail(sub))}</div>` : ''}</div>
     <div class="qrow__value">${esc(value)}</div>
   </div>`;
 

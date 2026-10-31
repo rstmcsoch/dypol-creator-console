@@ -15,14 +15,14 @@ import { mountProgress, progressLine, fetchProgress } from '../progress.js';
 
 // Every job state belongs to exactly one chip, so the chips add up to "All".
 const STATUS_TABS = [
-  ['', 'All'], ['queued', 'In line'], ['dispatched,running,generating,rendering', 'Being made'],
+  ['', 'All'], ['queued', 'Saved ideas'], ['dispatched,running,generating,rendering', 'Being made'],
   ['needs-review', 'Waiting for your check'], ['approved,scheduled', 'Approved'], ['uploading', 'Uploading'],
   ['published', 'On YouTube'], ['failed', 'Didn’t finish'], ['publish_failed', 'Upload didn’t finish'],
   ['rejected', 'Rejected'], ['superseded', 'Replaced by a redo'], ['cancelled', 'Stopped'],
 ];
 const SEGMENTS = {
   check: 'needs-review',
-  making: 'queued,dispatched,running,generating,rendering,uploading,approved,scheduled',
+  making: 'dispatched,running,generating,rendering,uploading,approved,scheduled',
   all: '',
 };
 const REJECTABLE = ['needs-review', 'awaiting-review', 'approved', 'scheduled', 'failed', 'publish_failed', 'queued'];
@@ -102,7 +102,7 @@ function card(j) {
       <span class="vitem__meta">${statusPill(j.status)}</span>
       <span class="vitem__sub">${esc(makerName(j.engine))} · ${esc(fmtAgo(j.updatedAt))}${j.attempt > 1 ? ` · version ${j.attempt}` : ''}${j.demo ? ' · demo' : ''}</span>
       ${err ? `<span class="vitem__err">${esc(failureLabel(j.errorCategory) || 'Something went wrong')}</span>` : ''}
-      ${['queued', 'dispatched', 'running', 'generating', 'rendering', 'uploading'].includes(j.status) ? `<span class="vitem__sub" data-pl="${esc(j.id)}">${esc(progressLine(j, null))}</span>` : ''}
+      ${['dispatched', 'running', 'generating', 'rendering', 'uploading'].includes(j.status) ? `<span class="vitem__sub" data-pl="${esc(j.id)}">${esc(progressLine(j, null))}</span>` : ''}
       ${info.tone === 'amber' && ['needs-review', 'awaiting-review'].includes(j.status) ? '<span class="vitem__cta">Tap to check it</span>' : ''}
     </span>
     ${icon('chevronR', 'icon--sm')}
@@ -123,7 +123,8 @@ function detailDrawer(j) {
   const canApprove = ['needs-review', 'awaiting-review'].includes(j.status);
   const canPublish = ['approved', 'scheduled'].includes(j.status);
   const canRetry = ['failed', 'cancelled', 'publish_failed'].includes(j.status);
-  const canStop = ['queued', 'dispatched', 'running', 'generating', 'rendering'].includes(j.status);
+  const canStop = ['dispatched', 'running', 'generating', 'rendering'].includes(j.status);
+  const isIdea = j.status === 'queued';
   const retriesLeft = Math.max(0, 2 - Number(j.retryCount || 0));
   const blocked = canPublish || canApprove ? j.publishBlocked : null;
   // A video that is simply waiting for review is not "blocked" — only show real blockers.
@@ -134,7 +135,7 @@ function detailDrawer(j) {
     publish: canPublish ? (realBlock || '') : 'Approve the video first.',
     retry: !canRetry ? 'Only videos that didn’t finish can be tried again.'
       : j.status !== 'publish_failed' && !retriesLeft ? 'Both tries are used — tap Redo for a fresh version.' : '',
-    regenerate: ['published', 'uploading'].includes(j.status) ? 'Videos on YouTube or uploading can’t be redone — make a new video instead.' : '',
+    regenerate: ['published', 'uploading'].includes(j.status) ? 'Videos on YouTube or uploading can’t be redone — make a new video instead.' : isIdea ? 'Not made yet.' : '',
     edit: j.status === 'published' ? 'Videos already on YouTube can’t be edited here — edit them in YouTube Studio.' : '',
   };
   const hasRun = !!j.runId && !j.demo;
@@ -227,9 +228,10 @@ function detailDrawer(j) {
   else if (canPublish) primary = btn('publish', 'Publish now', 'upload', 'btn--primary btn--xl');
   else if (canRetry) primary = btn('retry', j.status === 'publish_failed' ? 'Try upload again' : `Try again (${retriesLeft} left)`, 'refresh', 'btn--primary btn--xl');
   else if (canStop) primary = `<button class="btn btn--secondary btn--xl" data-jact="cancel">${icon('x', 'icon--sm')} Stop making</button>`;
+  else if (isIdea) primary = `<a class="btn btn--primary btn--xl" href="#/make?topic=${encodeURIComponent(j.topic || j.title || '')}&kind=${encodeURIComponent(j.engine || '')}">${icon('play', 'icon--sm')} Make this video now</a>`;
   const secondary = [
     why.regenerate ? '' : btn('regenerate', 'Redo', 'refresh'),
-    REJECTABLE.includes(j.status) ? btn('reject', 'Reject', 'x', 'btn--danger') : '',
+    isIdea ? `<button class="btn btn--danger" data-jact="cancel">${icon('x', 'icon--sm')} Remove idea</button>` : REJECTABLE.includes(j.status) ? btn('reject', 'Reject', 'x', 'btn--danger') : '',
   ].filter(Boolean).join('');
   const foot = j.status === 'published'
     ? `<div class="foot-stack">${videoLinks(j, true) || '<span class="small muted">On YouTube.</span>'}</div>`
@@ -259,7 +261,7 @@ function detailDrawer(j) {
             rows.push(`<li>${esc(String(it.segment ?? ''))} · ${esc(a.provider || 'unknown')} · ${esc(a.license || '—')}${it.review_required ? ' · <strong>check</strong>' : ''}${a.source_url && !/api\.cloudflare/.test(a.source_url) ? ` · <a href="${esc(a.source_url)}" target="_blank" rel="noopener">source</a>` : ''}</li>`);
           }
         }
-        credits.innerHTML = rows.length ? `<strong>Where the pictures came from</strong><ul style="margin:4px 0 0 16px">${rows.slice(0, 40).join('')}</ul>` : 'No picture-source list in this video.';
+        credits.innerHTML = rows.length ? `<details><summary><strong>Where the pictures came from (${rows.length})</strong></summary><ul style="margin:4px 0 0 16px">${rows.slice(0, 40).join('')}</ul></details>` : 'No picture-source list in this video.';
       })
       .catch(() => { credits.textContent = 'Picture sources unavailable.'; });
   }
@@ -335,7 +337,8 @@ function detailDrawer(j) {
       if (!await confirmModal('Try again?', `<p>Makes this video again with the latest version of the video maker (about 15 minutes). ${retriesLeft} ${retriesLeft === 1 ? 'try' : 'tries'} left.</p>`, 'Try again', false, 'Not now')) return;
     }
     if (action === 'cancel') {
-      if (!await confirmModal('Stop making this video?', '<p>The video maker stops and this video is thrown away. Nothing is published.</p>', 'Stop making', true, 'Keep making')) return;
+      if (isIdea ? !await confirmModal('Remove this idea?', '<p>The saved topic is removed from your list. Nothing was made or published.</p>', 'Remove idea', true, 'Keep it')
+        : !await confirmModal('Stop making this video?', '<p>The video maker stops and this video is thrown away. Nothing is published.</p>', 'Stop making', true, 'Keep making')) return;
     }
     if (action === 'regenerate') {
       const fb = await reasonSheet({ title: 'Make a new version?', intro: 'A fresh version is made (about 15 minutes) and replaces this one. Tell the maker what to change — optional.', okLabel: 'Start new version', optional: true, prefill: j.reviewNote || '' });
@@ -354,7 +357,7 @@ function detailDrawer(j) {
         reject: ['Rejected', 'It won’t be published. Your reason was saved.', 'ok'],
         regenerate: ['New version started', 'Follow it on Home — about 15 minutes.', 'ok'],
         retry: ['Trying again', 'Follow it on Home.', 'ok'],
-        cancel: ['Stopped', 'Nothing was published.', 'ok'],
+        cancel: isIdea ? ['Idea removed', '', 'ok'] : ['Stopped', 'Nothing was published.', 'ok'],
       }[action] || ['Done', res.message || '', 'ok'];
       toast(done[0], done[1], done[2], 6000);
       await refresh();

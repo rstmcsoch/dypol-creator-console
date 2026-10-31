@@ -49,7 +49,7 @@ function monthGrid(jobs, year, month) {
           <button class="cal-ev ${evClass(j)}" data-cal-job="${esc(j.id)}" title="${esc(j.title)}">
             ${j.engine === 'gemini' ? '◆' : '▶'} ${esc(j.title)}
           </button>`).join('')}
-        ${evs.length > 3 ? `<div class="tiny muted">+${evs.length - 3} more</div>` : ''}
+        ${evs.length > 3 ? `<button class="tiny cal-more" data-day="${esc(key)}">+${evs.length - 3} more</button>` : ''}
       </div>`;
     }).join('')}
   </div>`;
@@ -163,6 +163,9 @@ async function refresh() {
     else cursor.setDate(cursor.getDate() + 1);
     refresh();
   };
+  root.querySelectorAll('[data-day]').forEach((b) => {
+    b.onclick = () => { const [y, m, d] = b.dataset.day.split('-').map(Number); cursor = new Date(y, m - 1, d); view = 'day'; refresh(); };
+  });
   root.querySelector('#cal-today').onclick = () => { cursor = new Date(); refresh(); };
   root.querySelector('#cal-seg').addEventListener('click', (e) => {
     const b = e.target.closest('[data-view]');

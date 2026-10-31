@@ -120,7 +120,7 @@ const VIS_WORD = { unlisted: 'Unlisted', private: 'Private', public: 'Public' };
 export const visWord = () => VIS_WORD[UI_PREFS.visibility] || 'Unlisted';
 
 const JOB_STATUS = {
-  queued: ['gray', 'In line', 'Waiting to start. It begins on its own.'],
+  queued: ['gray', 'Saved idea', 'A topic saved for later. Nothing starts by itself — tap Make this video now when you want it.'],
   scheduled: ['gray', 'Planned', 'Will start or upload at the planned time.'],
   draft: ['gray', 'Draft', 'Saved, not being made yet.'],
   dispatched: ['blue', 'Starting…', 'Sent to the video maker. It usually starts within a minute.'],

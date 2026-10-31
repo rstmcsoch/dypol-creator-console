@@ -31,7 +31,8 @@ function kindCard(id, enabled) {
   </button>`;
 }
 
-export async function renderMake(root) {
+export async function renderMake(root, ctx = {}) {
+  const q = ctx.query || new URLSearchParams();
   const enabled = {
     gemini: UI_PREFS.engines?.gemini?.enabled ?? true,
     verticals: UI_PREFS.engines?.verticals?.enabled ?? true,
@@ -39,6 +40,7 @@ export async function renderMake(root) {
   if (!form.engine || !enabled[form.engine]) {
     form.engine = enabled[UI_PREFS.defaultEngine] ? UI_PREFS.defaultEngine : (enabled.gemini ? 'gemini' : 'verticals');
   }
+  if (q.get('kind') && MAKERS[q.get('kind')]) form.engine = q.get('kind');
   const niche = UI_PREFS.defaultNiche || 'general';
 
   const draw = () => {
@@ -192,4 +194,5 @@ export async function renderMake(root) {
   }
 
   draw();
+  if (q.get('topic')) root.querySelector('#mk-topic').value = q.get('topic');
 }

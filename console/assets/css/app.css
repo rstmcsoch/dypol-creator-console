@@ -1187,3 +1187,6 @@ details.adv > summary::after, details.filters > summary::after, .mini-details > 
 details.adv > summary > .muted { flex-basis: 100%; font-size: 13px; margin-top: -4px; padding-left: 24px; }
 details.adv > summary > .muted::first-letter { text-transform: uppercase; }
 .mini-details > summary > .muted { flex-basis: 100%; font-size: 13px; margin-top: -4px; padding-left: 24px; font-weight: 400; }
+.modal-wrap { background: rgba(26, 28, 32, .45); }
+.cal-more { color: var(--accent-700); font-weight: 700; text-decoration: underline; padding: 2px 0; }
+#visual-credits details summary { cursor: pointer; }

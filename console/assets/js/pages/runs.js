@@ -12,7 +12,7 @@ function runDrawer(r) {
   const body = `
     <div class="row row--wrap" style="gap:8px">
       ${enginePill(r.engine)}
-      ${statusPill(r.status)}
+      ${statusPill(r.status === 'queued' ? 'dispatched' : r.status)}
       ${r.demo ? '<span class="pill pill--accent">Demo record</span>' : ''}
     </div>
     <dl class="kv">
@@ -21,13 +21,14 @@ function runDrawer(r) {
       <dt>Video</dt><dd>${r.jobId ? `<a href="#/videos?job=${encodeURIComponent(r.jobId)}">${esc(r.jobTitle || r.jobId)}</a>` : '—'}</dd>
       <dt>Started</dt><dd>${esc(fmtDateTime(r.startedAt))}</dd>
       <dt>Took</dt><dd>${esc(fmtDuration(r.durationSec))}</dd>
-      <dt>Result</dt><dd>${statusPill(r.status)}</dd>
+      <dt>Result</dt><dd>${statusPill(r.status === 'queued' ? 'dispatched' : r.status)}</dd>
       ${r.failureReason ? `<dt>What went wrong</dt><dd style="color:var(--red)">${esc(r.failureReason)}</dd>` : ''}
     </dl>
     ${r.demo ? '' : '<div id="run-progress" aria-live="polite"></div>'}
     ${failedStep ? `<div class="callout callout--danger">${icon('alert')}<div><strong>Stopped at: ${esc(failedStep.name)}.</strong> ${esc(failedStep.note || 'See the log below.')}</div></div>` : ''}
     <div>
       <strong class="small">Steps</strong>
+      ${(r.steps || []).length ? '' : '<div class="tiny muted" style="margin-top:6px">No step details were recorded for this run.</div>'}
       <div class="qc" style="margin-top:8px">
         ${(r.steps || []).map((s) => `
           <div class="qc__row ${s.status === 'failed' ? 'is-bad' : s.status === 'running' ? 'is-warn' : s.status === 'skipped' ? 'is-off' : ''}">
@@ -93,7 +94,7 @@ async function refresh() {
       ${runs.map((r) => `
         <div class="run-item" data-run="${esc(r.id)}" role="button" tabindex="0">
           <div class="run-item__top">
-            ${enginePill(r.engine)} ${statusPill(r.status)}
+            ${enginePill(r.engine)} ${statusPill(r.status === 'queued' ? 'dispatched' : r.status)}
             <span class="spacer"></span>
             <span class="tiny muted">${esc(fmtDateTime(r.startedAt))}</span>
           </div>

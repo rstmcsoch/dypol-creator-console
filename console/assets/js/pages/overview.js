@@ -9,7 +9,7 @@ import {
   errorToast, UI_PREFS, statusInfo,
 } from '../ui.js';
 
-const MAKING = ['queued', 'dispatched', 'running', 'generating', 'rendering', 'uploading'];
+const MAKING = ['dispatched', 'running', 'generating', 'rendering', 'uploading'];
 const CHECK = ['needs-review', 'awaiting-review'];
 
 function greeting() {
@@ -51,7 +51,7 @@ function makingCard(j) {
     </a>
     <div class="progress progress--lg"><div class="progress__bar" data-bar style="width:${typeof j.progress === 'number' ? Math.max(4, j.progress) : 8}%"></div></div>
     <div class="vcard__line" data-line>${esc(progressLine(j, null))}</div>
-    ${['queued', 'dispatched', 'running', 'generating', 'rendering'].includes(j.status)
+    ${['dispatched', 'running', 'generating', 'rendering'].includes(j.status)
       ? `<div class="vcard__actions"><button class="btn btn--ghost btn--sm" data-stop="${esc(j.id)}">${icon('x', 'icon--sm')} Stop making</button></div>` : ''}
   </div>`;
 }
@@ -74,9 +74,11 @@ async function refresh() {
   const toCheck = jobs.filter((j) => CHECK.includes(j.status));
   const making = jobs.filter((j) => MAKING.includes(j.status));
   const recentCut = Date.now() - 48 * 3600e3;
-  const failed = jobs.filter((j) => ['failed', 'publish_failed'].includes(j.status) && Date.parse(j.updatedAt) > recentCut);
+  const seenTitle = new Set();
+  const failed = jobs.filter((j) => ['failed', 'publish_failed'].includes(j.status) && Date.parse(j.updatedAt) > recentCut)
+    .filter((j) => { const k = (j.title || j.topic || j.id).toLowerCase(); if (seenTitle.has(k)) return false; seenTitle.add(k); return true; });
   const approved = jobs.filter((j) => j.status === 'approved');
-  const recent = jobs.filter((j) => !MAKING.includes(j.status) && !CHECK.includes(j.status)).slice(0, 4);
+  const recent = jobs.filter((j) => !MAKING.includes(j.status) && !CHECK.includes(j.status) && j.status !== 'queued').slice(0, 4);
   const cap = list.cap || null;
   const capLimit = cap?.limit ?? UI_PREFS.dailyCap ?? 2;
   const capUsed = cap?.used ?? 0;
