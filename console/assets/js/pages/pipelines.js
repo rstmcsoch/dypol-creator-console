@@ -1,18 +1,19 @@
-/* Pipelines — per-engine stage management (stages reflect each engine's real implementation) */
+/* Video makers (Advanced) — per-maker steps, last run, schedule. Same functions as the old
+   Pipelines page, in plain words. Starting a video normally happens on the Make page. */
 import { api } from '../api.js';
 import {
   icon, esc, statusPill, friendlyStage, progressBar, toast, openModal, closeModal, fmtDateTime,
-  fmtDuration, confirmModal, renderLogs,
+  fmtDuration, confirmModal, renderLogs, makerName, errorToast, failureLabel,
 } from '../ui.js';
 
 const STAGE_HELP = {
-  unsupported: 'Not implemented by this engine — the console will never report it as complete.',
-  'not-configured': 'Supported but missing credentials/configuration.',
-  pending: 'Waiting in the pipeline.',
-  running: 'Currently executing.',
-  done: 'Completed successfully.',
-  failed: 'Failed — inspect logs and retry.',
-  blocked: 'Blocked by a safeguard (duplicate, cap, or approval gate).',
+  unsupported: 'This video maker doesn’t do this step.',
+  'not-configured': 'This step needs setting up first.',
+  pending: 'Not started yet.',
+  running: 'Working on it now.',
+  done: 'Finished.',
+  failed: 'Stopped here — see Technical history.',
+  blocked: 'Held by a safety rule (repeat topic, daily limit, or your check).',
 };
 
 function stageTrack(stages = []) {
@@ -34,29 +35,29 @@ function stageTrack(stages = []) {
 
 function runModal(engine) {
   openModal({
-    title: `Run ${engine.name}`,
+    title: `Make a ${makerName(engine.id)}`,
     body: `
       <div class="field">
         <label class="field__label" for="p-topic">Topic (optional)</label>
-        <input class="input" id="p-topic" placeholder="Leave empty for automatic topic selection" />
+        <input class="input" id="p-topic" placeholder="Leave empty and the maker picks one" />
       </div>
       ${engine.id === 'verticals' ? `<div class="field">
-        <label class="field__label" for="p-context">Context / facts (optional)</label>
+        <label class="field__label" for="p-context">Facts to include (optional)</label>
         <textarea class="input" id="p-context" rows="3" placeholder="Key facts, date, source names the script should use"></textarea>
       </div>` : ''}
       <div class="field">
-        <label class="field__label">Execution phase</label>
+        <label class="field__label">What to run</label>
         <div class="row row--wrap" id="p-phase" style="gap:8px">
-          <button class="chip is-active" data-phase="draft">${icon('doc', 'icon--sm')} Draft + render (no upload)</button>
-          <button class="chip" data-phase="publish">${icon('upload', 'icon--sm')} Publish last approved</button>
-          <button class="chip" data-phase="full">${icon('run', 'icon--sm')} Full pipeline</button>
+          <button class="chip is-active" data-phase="draft">${icon('doc', 'icon--sm')} Make a video (waits for your check)</button>
+          <button class="chip" data-phase="publish">${icon('upload', 'icon--sm')} Upload the last approved video</button>
+          <button class="chip" data-phase="full">${icon('run', 'icon--sm')} Make, then upload what I approved</button>
         </div>
-        <div class="field__hint">Draft phase keeps the review gate intact: videos are produced as drafts and never uploaded before approval.</div>
+        <div class="field__hint">Nothing goes on YouTube before you approve it, whichever you pick.</div>
       </div>
-      ${engine.supports?.topic ? '' : `<div class="callout callout--warn">${icon('alert')}<div>This engine picks its own topics — a custom topic is only used when the workflow supports <span class="mono">topic</span> input.</div></div>`}
-      <div class="callout">${icon('shield')}<div>Dispatched via GitHub Actions workflow_dispatch. Secrets stay in GitHub Actions Secrets; the console never receives model or YouTube credentials.</div></div>`,
+      ${engine.supports?.topic ? '' : `<div class="callout callout--warn">${icon('alert')}<div>This video maker usually picks its own topics, so your topic may be ignored.</div></div>`}
+      <div class="callout">${icon('shield')}<div>Made in the cloud. Your passwords and keys stay there and are never shown here.</div></div>`,
     foot: `<button class="btn btn--secondary" id="m-cancel">Cancel</button>
-           <button class="btn btn--primary" id="m-go">${icon('run', 'icon--sm')} Dispatch run</button>`,
+           <button class="btn btn--primary" id="m-go">${icon('play', 'icon--sm')} Start making</button>`,
   });
   let phase = 'draft';
   document.getElementById('p-phase').addEventListener('click', (e) => {
@@ -74,11 +75,11 @@ function runModal(engine) {
       const ctxEl = document.getElementById('p-context');
       const res = await api.engineRun(engine.id, { topic: topic || undefined, phase, context: ctxEl?.value.trim() || undefined });
       closeModal();
-      toast('Workflow dispatched', res.message || 'GitHub Actions run queued.', 'ok');
+      toast('Started!', 'Follow it on Home — about 15 minutes.', 'ok');
       await refresh();
     } catch (err) {
       btn.disabled = false;
-      toast('Dispatch failed', err.message, 'bad');
+      errorToast(err, 'Couldn’t start');
     }
   };
 }
@@ -86,69 +87,71 @@ function runModal(engine) {
 function enginePanel(e) {
   const schedule = e.schedule || {};
   const connLabel = e.connectionState === 'connected' ? 'Connected'
-    : e.connectionState === 'demo-unverified' ? 'Demo · unverified'
-    : e.connectionState === 'disabled' ? 'Disabled'
-    : e.connectionState === 'error' ? 'GitHub error' : 'Not configured';
+    : e.connectionState === 'demo-unverified' ? 'Demo'
+    : e.connectionState === 'disabled' ? 'Switched off'
+    : e.connectionState === 'error' ? 'Can’t reach it' : 'Not set up';
   const connColor = e.connectionState === 'connected' ? 'green'
     : e.connectionState === 'error' ? 'red' : e.connectionState === 'demo-unverified' ? 'amber' : 'gray';
   return `
   <div class="card">
-    <div class="card__head">
-      <div class="engine-icon engine-icon--${e.id === 'gemini' ? 'gemini' : 'verticals'}" style="width:38px;height:38px;border-radius:10px">
-        ${icon(e.id === 'gemini' ? 'sparkles' : 'play', 'icon--sm')}
+    <div class="card__head card__head--stack">
+      <div class="row" style="gap:12px;min-width:0">
+        <div class="engine-icon engine-icon--${e.id === 'gemini' ? 'gemini' : 'verticals'}" style="width:40px;height:40px;border-radius:11px">
+          ${icon(e.id === 'gemini' ? 'video' : 'play', 'icon--sm')}
+        </div>
+        <div style="min-width:0">
+          <h2>${esc(makerName(e.id))}</h2>
+          <div class="row row--wrap" style="gap:6px;margin-top:4px">
+            <span class="pill pill--${e.badge === 'PRIMARY' ? 'accent' : 'gray'}">${e.badge === 'PRIMARY' ? 'Main maker' : 'Backup maker'}</span>
+            <span class="pill pill--${connColor}"><span class="dot"></span>${esc(connLabel)}</span>
+          </div>
+        </div>
       </div>
-      <div>
-        <h2 style="display:flex;align-items:center;gap:8px">${esc(e.name)}
-          <span class="pill pill--${e.badge === 'PRIMARY' ? 'accent' : 'gray'}">${esc(e.badge)}</span>
-          <span class="pill pill--${connColor}" title="${esc(e.connectionDetail || '')}"><span class="dot"></span>${esc(connLabel)}</span>
-        </h2>
-        <div class="tiny muted">${esc(e.tagline)} · workflow <span class="mono">${esc(e.workflow)}</span> on <span class="mono">${esc(e.repo)}@${esc(e.branch)}</span></div>
-      </div>
-      <div class="right">
-        <button class="btn btn--primary btn--sm" data-action="run" data-id="${esc(e.id)}"
-          ${e.connectionState === 'disabled' ? 'aria-disabled="true" data-why="Enable this engine in Settings first"' : ''}>${icon('run', 'icon--sm')} Start run</button>
-        <button class="btn btn--secondary btn--sm" data-action="cancel" data-id="${esc(e.id)}" ${e.running ? '' : 'aria-disabled="true" data-why="No running job to cancel"'}>${icon('x', 'icon--sm')} Cancel</button>
+      <div class="row row--wrap" style="gap:8px">
+        <button class="btn btn--primary" data-action="run" data-id="${esc(e.id)}"
+          ${e.connectionState === 'disabled' ? 'aria-disabled="true" data-why="This maker is switched off. Turn it on in Settings → Advanced → Video makers."' : ''}>${icon('play', 'icon--sm')} Make a video</button>
+        <button class="btn btn--secondary" data-action="cancel" data-id="${esc(e.id)}" ${e.running ? '' : 'aria-disabled="true" data-why="Nothing is being made by this maker right now."'}>${icon('x', 'icon--sm')} Stop current video</button>
       </div>
     </div>
-    ${e.connectionState === 'error' ? `<div class="card__body" style="padding-top:0"><div class="callout callout--warn">${icon('alert')}<div>${esc(e.connectionDetail || 'GitHub unreachable')}</div></div></div>` : ''}
+    ${e.connectionState === 'error' ? `<div class="card__body" style="padding-top:0"><div class="callout callout--warn">${icon('alert')}<div>Can’t reach this video maker right now. ${esc(e.connectionDetail || '')}</div></div></div>` : ''}
     <div class="card__body stack" style="gap:16px">
-      ${e.latestError ? `<div class="callout callout--danger">${icon('alert')}<div><strong>Latest error.</strong> ${esc(e.latestError)}</div></div>` : ''}
+      ${e.latestError ? `<div class="callout callout--danger">${icon('alert')}<div><strong>Last problem:</strong> ${esc(e.latestError)}</div></div>` : ''}
       <div>
         <div class="row" style="margin-bottom:10px">
-          <strong class="small">Execution stages</strong>
-          <span class="tiny muted">— stages not implemented by this engine are marked “unsupported” and never fabricate success</span>
+          <strong class="small">Steps</strong>
+          <span class="tiny muted">— a step shows “done” only when the maker really finished it</span>
         </div>
         ${stageTrack(e.stages)}
       </div>
       <div class="grid grid--2" style="gap:14px">
         <div class="card card--pad" style="background:var(--bg-sunken)">
-          <div class="tiny muted" style="font-weight:700;letter-spacing:.6px;text-transform:uppercase;margin-bottom:8px">Execution</div>
+          <div class="tiny muted" style="font-weight:700;letter-spacing:.6px;text-transform:uppercase;margin-bottom:8px">Last time</div>
           <dl class="kv">
-            <dt>Last run</dt><dd>${e.lastRun ? `${esc(fmtDateTime(e.lastRun.startedAt))} · ${statusPill(e.lastRun.status)}` : '—'}</dd>
-            <dt>Duration</dt><dd>${e.lastRun ? esc(fmtDuration(e.lastRun.durationSec)) : '—'}</dd>
+            <dt>Started</dt><dd>${e.lastRun ? `${esc(fmtDateTime(e.lastRun.startedAt))} · ${statusPill(e.lastRun.status)}` : '—'}</dd>
+            <dt>Took</dt><dd>${e.lastRun ? esc(fmtDuration(e.lastRun.durationSec)) : '—'}</dd>
             <dt>Last success</dt><dd>${e.lastSuccess ? esc(fmtDateTime(e.lastSuccess)) : '—'}</dd>
-            <dt>Run ID</dt><dd class="mono">${e.lastRun ? esc(e.lastRun.runId) : '—'}</dd>
+            <dt>Reference</dt><dd class="mono">${e.lastRun ? esc(e.lastRun.runId) : '—'}</dd>
           </dl>
           <div class="row row--wrap" style="margin-top:12px">
-            ${e.lastRun?.githubUrl ? `<a class="btn btn--secondary btn--sm" href="${esc(e.lastRun.githubUrl)}" target="_blank" rel="noopener">${icon('github', 'icon--sm')} GitHub Actions run</a>` : ''}
-            <a class="btn btn--ghost btn--sm" href="#/runs">${icon('doc', 'icon--sm')} Logs</a>
-            <button class="btn btn--ghost btn--sm" data-action="retry" data-id="${esc(e.id)}" ${e.lastRun?.status === 'failed' ? '' : 'aria-disabled="true" data-why="Only a failed run can be retried"'}>${icon('refresh', 'icon--sm')} Retry failed run</button>
+            ${e.lastRun?.githubUrl ? `<a class="btn btn--secondary btn--sm" href="${esc(e.lastRun.githubUrl)}" target="_blank" rel="noopener">${icon('github', 'icon--sm')} Open in GitHub</a>` : ''}
+            <a class="btn btn--ghost btn--sm" href="#/runs">${icon('doc', 'icon--sm')} Technical history</a>
+            <button class="btn btn--ghost btn--sm" data-action="retry" data-id="${esc(e.id)}" ${e.lastRun?.status === 'failed' ? '' : 'aria-disabled="true" data-why="Only a run that didn’t finish can be tried again."'}>${icon('refresh', 'icon--sm')} Try the last run again</button>
           </div>
         </div>
         <div class="card card--pad" style="background:var(--bg-sunken)">
-          <div class="tiny muted" style="font-weight:700;letter-spacing:.6px;text-transform:uppercase;margin-bottom:8px">Scheduling & publishing</div>
+          <div class="tiny muted" style="font-weight:700;letter-spacing:.6px;text-transform:uppercase;margin-bottom:8px">Automatic schedule</div>
           <div class="switch-row" style="padding:8px 0">
             <div class="switch-row__text">
-              <strong>Schedule</strong>
-              <span>${schedule.enabled ? esc(schedule.label || 'Enabled') : 'Disabled'} · ${esc(schedule.cron || '')}</span>
+              <strong>Start videos automatically</strong>
+              <span>${schedule.enabled ? esc(schedule.label || 'On') : 'Off'}${schedule.cron ? ` · <span class="mono">${esc(schedule.cron)}</span>` : ''}. You still check every video.</span>
             </div>
-            <button class="switch ${schedule.enabled ? 'is-on' : ''}" data-action="toggle-schedule" data-id="${e.id}" aria-label="Toggle schedule"></button>
+            <button class="switch ${schedule.enabled ? 'is-on' : ''}" data-action="toggle-schedule" data-id="${e.id}" aria-label="Start videos automatically"></button>
           </div>
           <dl class="kv" style="margin-top:8px">
-            <dt>Publishing</dt><dd>${esc(e.publishingMode || 'review-required')}</dd>
-            <dt>Draft phase</dt><dd>${e.supports?.draftPhase ? 'Supported' : 'Unsupported'}</dd>
-            <dt>Cancellation</dt><dd>${e.supports?.cancellation ? 'Supported (GitHub API)' : 'Not supported mid-run'}</dd>
-            <dt>Artifacts</dt><dd>${(e.artifacts || []).length ? e.artifacts.map((a) => esc(a.name)).join(', ') : 'Listed in Run History after a sync'}</dd>
+            <dt>Publishing</dt><dd>${e.publishingMode === 'review-required' || !e.publishingMode ? 'You check every video first' : esc(e.publishingMode)}</dd>
+            <dt>Make without uploading</dt><dd>${e.supports?.draftPhase ? 'Yes' : 'No'}</dd>
+            <dt>Can be stopped</dt><dd>${e.supports?.cancellation ? 'Yes' : 'Not while running'}</dd>
+            <dt>Files</dt><dd>${(e.artifacts || []).length ? e.artifacts.map((a) => esc(a.name)).join(', ') : 'Listed in Technical history'}</dd>
           </dl>
         </div>
       </div>
@@ -162,46 +165,45 @@ async function refresh() {
   const d = await api.engines();
 
   root.innerHTML = `
+    <a class="back-link" href="#/settings">${icon('chevronL', 'icon--sm')} Settings</a>
     <div class="page-head">
       <div>
-        <h1>Pipelines</h1>
-        <div class="sub">Manage the two production engines — stage tracks reflect each engine’s real implementation.</div>
+        <h1>Video makers</h1>
+        <div class="sub">The two cloud tools that make your videos. Most days you only need <a href="#/make">Make a video</a>.</div>
       </div>
       <div class="page-head__actions">
-        <a class="btn btn--secondary" href="#/runs">${icon('history', 'icon--sm')} Run history</a>
-        <button class="btn btn--primary" id="btn-orchestrate">${icon('zap', 'icon--sm')} Run orchestrated</button>
+        <a class="btn btn--secondary" href="#/runs">${icon('history', 'icon--sm')} Technical history</a>
+        <button class="btn btn--secondary" id="btn-orchestrate">${icon('zap', 'icon--sm')} Let the system choose</button>
       </div>
     </div>
 
-    <div class="seg" id="engine-seg" style="margin-bottom:18px">
-      ${d.engines.map((e) => `<button class="${(query.get('engine') || d.active) === e.id ? 'is-active' : ''}" data-seg="${e.id}">${esc(e.name)}</button>`).join('')}
-      <button class="${query.get('engine') === 'both' ? 'is-active' : ''}" data-seg="both">Both engines</button>
+    <div class="seg seg--wide" id="engine-seg" style="margin-bottom:18px">
+      ${d.engines.map((e) => `<button class="${(query.get('engine') || d.active) === e.id ? 'is-active' : ''}" data-seg="${e.id}">${esc(makerName(e.id))}</button>`).join('')}
+      <button class="${query.get('engine') === 'both' ? 'is-active' : ''}" data-seg="both">Both</button>
     </div>
 
     <div class="stack" id="engine-panels">
       ${(query.get('engine') === 'both' ? d.engines : d.engines.filter((e) => e.id === (query.get('engine') || d.active || 'gemini'))).map(enginePanel).join('')}
     </div>
 
-    <div class="callout" style="margin-top:20px">${icon('info')}
-      <div><strong>How staging honesty works.</strong> ${esc(d.stagePolicy || 'Each engine reports stage results from its own pipeline state (Engine A: curriculum → content → TTS → visuals → render → upload; Engine B: research → draft → b-roll → voiceover → ASR → captions → music → assemble → thumbnail → upload). A stage shows “done” only when the engine recorded it as completed.')}</div>
-    </div>
-
-    <div class="footer-note">
-      <span class="brand-lockup"><span class="mark">${icon('play', 'icon--sm')}</span><strong>DYPOL LABS</strong></span>
-      <span>DYPOL Creator Console</span><span>·</span><span>Dual-engine orchestration</span>
-    </div>`;
+    <details class="mini-details" style="margin-top:18px">
+      <summary>${icon('info', 'icon--sm')} How the steps are shown</summary>
+      <p class="small muted" style="margin-top:8px">${esc(d.stagePolicy || 'Each maker reports its own steps. Long video + Short: topic → script → voice → visuals → put together → upload. Short only: research → script → visuals → voice → captions → music → put together → thumbnail → upload. A step shows “done” only when the maker really finished it.')}</p>
+    </details>`;
 
   root.querySelector('#engine-seg').addEventListener('click', (e) => {
     const b = e.target.closest('[data-seg]');
     if (!b) return;
-    location.hash = `#/pipelines?engine=${b.dataset.seg}`;
+    location.hash = `#/makers?engine=${b.dataset.seg}`;
   });
-  root.querySelector('#btn-orchestrate').onclick = async () => {
+  root.querySelector('#btn-orchestrate').onclick = async (ev) => {
+    if (!await confirmModal('Let the system choose?', '<p>The system starts the main video maker (backup if it breaks), following your video maker plan in Settings → Advanced. You still check the video before it goes up.</p>', 'Start', false, 'Not now')) return;
+    ev.target.disabled = true;
     try {
-      const res = await api.post('/api/orchestrate/run', {});
-      toast('Orchestration started', res.message, 'ok');
+      await api.post('/api/orchestrate/run', {});
+      toast('Started!', 'Follow it on Home — about 15 minutes.', 'ok');
       await refresh();
-    } catch (err) { toast('Orchestration failed', err.message, 'bad'); }
+    } catch (err) { ev.target.disabled = false; errorToast(err, 'Couldn’t start'); }
   };
 
   root.querySelectorAll('[data-action="run"]').forEach((b) => {
@@ -212,21 +214,22 @@ async function refresh() {
   });
   root.querySelectorAll('[data-action="cancel"]').forEach((b) => {
     b.onclick = async () => {
-      if (!await confirmModal('Cancel running job?', 'The workflow will be cancelled at the GitHub Actions level. Partial artifacts are kept.', 'Cancel run', true)) return;
+      if (!await confirmModal('Stop the current video?', '<p>The video maker stops and the video being made is thrown away. Nothing is published.</p>', 'Stop it', true, 'Keep going')) return;
       try {
         const res = await api.engineCancel(b.dataset.id, {});
-        toast('Cancellation requested', res.message, 'ok');
+        toast('Stopping', 'Nothing was published.', 'ok');
         await refresh();
-      } catch (err) { toast('Cancel failed', err.message, 'bad'); }
+      } catch (err) { errorToast(err, 'Couldn’t stop it'); }
     };
   });
   root.querySelectorAll('[data-action="retry"]').forEach((b) => {
     b.onclick = async () => {
+      if (!await confirmModal('Try the last run again?', '<p>Makes the last video that didn’t finish again, with the latest version of the maker. You still check it before it goes up.</p>', 'Try again', false, 'Not now')) return;
       try {
-        const res = await api.post(`/api/engines/${b.dataset.id}/retry`, {});
-        toast('Retry dispatched', res.message, 'ok');
+        await api.post(`/api/engines/${b.dataset.id}/retry`, {});
+        toast('Trying again', 'Follow it on Home.', 'ok');
         await refresh();
-      } catch (err) { toast('Retry failed', err.message, 'bad'); }
+      } catch (err) { errorToast(err, 'Couldn’t try again'); }
     };
   });
   root.querySelectorAll('[data-action="toggle-schedule"]').forEach((b) => {
@@ -234,9 +237,9 @@ async function refresh() {
       const e = d.engines.find((x) => x.id === b.dataset.id);
       try {
         const res = await api.post(`/api/engines/${e.id}/schedule`, { enabled: !e.schedule?.enabled });
-        toast('Schedule updated', res.message, 'ok');
+        toast(e.schedule?.enabled ? 'Automatic videos off' : 'Automatic videos on', res.message || '', 'ok');
         await refresh();
-      } catch (err) { toast('Update failed', err.message, 'bad'); }
+      } catch (err) { errorToast(err, 'Couldn’t change it'); }
     };
   });
 }

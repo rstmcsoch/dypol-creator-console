@@ -1,291 +1,269 @@
-/* Settings — engines, orchestration, scheduling, publishing, security, health.
+/* Settings — everyday settings first; every advanced control (makers, plan,
+   publishing rules, schedule, cloud connection, system status) kept in
+   collapsed groups with the same element ids and the same save payload.
    AUDIT: every visible control is persisted AND enforced by the backend
    (engine enable gates dispatch, concurrency/retry limits gate runs, draft
    mode gates publishing). Connection badges reflect tested state, never
    mere credential presence. */
 import { api } from '../api.js';
 import { quotaPanelShell, mountQuotaPanel } from '../quota-panel.js';
-import { icon, esc, toast, statusPill } from '../ui.js';
+import { icon, esc, toast, statusPill, errorToast, UI_PREFS } from '../ui.js';
 
 const MODES = [
-  { id: 'primary_with_fallback', name: 'Mode 1 — Primary with fallback', desc: 'Run Engine A first. Engine B runs only when the primary attempt genuinely fails and fallback is appropriate.' },
-  { id: 'alternate', name: 'Mode 2 — Alternate engines', desc: 'Production runs alternate between the two engines on a configurable schedule (odd/even days or run index).' },
-  { id: 'draft_both', name: 'Mode 3 — Both engines, draft mode', desc: 'Both engines produce a candidate video for comparison. Nothing publishes until you pick a winner — neither engine can auto-publish a duplicate.' },
+  { id: 'primary_with_fallback', name: 'Main maker first, backup if it breaks', desc: '“Long video + Short” runs first. Only if it really fails does “Short only” try instead. (Mode 1)' },
+  { id: 'alternate', name: 'Take turns', desc: 'The two makers take turns, by day or by run. (Mode 2)' },
+  { id: 'draft_both', name: 'Make both, I pick the better one', desc: 'Both makers make a version. Nothing goes up until you choose — never both. (Mode 3)' },
 ];
+const NICHES = [['general', 'General'], ['tech', 'Tech'], ['science', 'Science'], ['education', 'Education'], ['finance', 'Money & finance'], ['gaming', 'Gaming'], ['motivation', 'Motivation']];
+const LANGS = [['en', 'English'], ['hi', 'Hindi'], ['es', 'Spanish'], ['pt', 'Portuguese'], ['de', 'German'], ['fr', 'French'], ['ja', 'Japanese'], ['ko', 'Korean']];
+
+const sw = (id, on, title, help, label) => `
+  <div class="switch-row">
+    <div class="switch-row__text"><strong>${title}</strong><span>${help}</span></div>
+    <button type="button" class="switch ${on ? 'is-on' : ''}" id="${id}" role="switch" aria-checked="${!!on}" aria-label="${esc(label || title)}"></button>
+  </div>`;
+const group = (id, ic, title, sub, inner, open = false) => `
+  <details class="card adv" id="${id}" ${open ? 'open' : ''}>
+    <summary>${icon(ic, 'icon--sm')} ${title} <span class="muted small">${sub}</span></summary>
+    <div class="adv__body">${inner}</div>
+  </details>`;
 
 async function refresh() {
   const root = document.getElementById('page-root');
   const s = await api.settings();
   const h = s.health || {};
   const yt = s.youtube || { state: 'missing-credentials' };
+  const P = s.publishing || {};
+  const vis = P.visibility || 'private';
+  const VIS = { private: 'Private', unlisted: 'Unlisted', public: 'Public' };
+  const openWhich = new URLSearchParams(location.hash.split('?')[1] || '').get('open');
+  const rule = (ok, text) => `<li class="${ok ? '' : 'is-off'}">${icon(ok ? 'check' : 'alert', 'icon--sm')}<span>${text}</span></li>`;
 
   root.innerHTML = `
-    <div class="page-head">
-      <div>
-        <h1>Settings</h1>
-        <div class="sub">Engine connections, orchestration policy, publishing safeguards and system health.</div>
-      </div>
-      <div class="page-head__actions">
-        <button class="btn btn--primary" id="btn-save">${icon('check', 'icon--sm')} Save settings</button>
-      </div>
+    <div class="page-head page-head--simple">
+      <div><h1>Settings</h1>
+        <div class="sub">Everyday settings first. Advanced settings are further down and most people never need them.</div></div>
     </div>
 
-    <div class="callout" style="margin-bottom:20px">${icon('lock')}<div><strong>Credential safety.</strong> API credentials are stored only in server-side secrets (Cloudflare Pages secrets / GitHub Actions Secrets). They are never returned to the browser, never written to local storage, and never shown here — this page reports only “configured / not configured”.</div></div>
+    <section class="card card--pad safety">
+      <div class="safety__title">${icon('shield', 'icon--sm')} Safety rules</div>
+      <ul class="safety__list">
+        ${rule(P.reviewRequired, P.reviewRequired ? 'You check every video before it goes on YouTube' : 'Your check before publishing is OFF')}
+        ${rule(!P.autoPublish, !P.autoPublish ? 'Nothing is published without your tap' : 'Publishing without you is ON')}
+        ${rule(vis !== 'public', `Videos go up as <strong>${esc(VIS[vis] || vis)}</strong>${vis === 'unlisted' ? ' — only people with the link can see them' : ''}`)}
+        ${rule(true, `At most <strong>${esc(String(P.dailyCap ?? 2))}</strong> uploads a day`)}
+        ${rule(P.dedupe, P.dedupe ? 'Repeat topics are blocked' : 'Repeat-topic blocking is OFF')}
+        ${rule(P.publishLock, P.publishLock ? 'Only one upload at a time' : 'One-upload-at-a-time is OFF')}
+      </ul>
+      <div class="field__hint">Change these under Advanced → Publishing rules.</div>
+    </section>
 
-    <div class="rail-grid">
-      <div class="stack">
+    <section class="card">
+      <div class="card__head">${icon('sparkles')}<h2>Everyday settings</h2></div>
+      <div class="card__body stack">
+        ${sw('s-pause', s.schedule?.automationPaused, 'Pause automatic videos', 'When on, no video starts by itself. You can still tap Make. Nothing is deleted.')}
+        <div class="field"><label class="field__label" for="s-default-engine">Default kind of video</label>
+          <select class="select select--lg" id="s-default-engine">
+            <option value="gemini" ${s.defaults?.engine === 'gemini' ? 'selected' : ''}>Long video + Short</option>
+            <option value="verticals" ${s.defaults?.engine === 'verticals' ? 'selected' : ''}>Short only</option>
+          </select>
+          <div class="field__hint">Picked first on the Make page and used for saved ideas.</div></div>
+        <div class="field"><label class="field__label" for="s-default-niche">Default category</label>
+          <select class="select select--lg" id="s-default-niche">
+            ${NICHES.map(([v, l]) => `<option value="${v}" ${s.defaults?.niche === v ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>
+          <div class="field__hint">Used to pick a topic when you leave the topic empty.</div></div>
+        <div class="field"><span class="field__label">Upload between (India time)</span>
+          <div class="row" style="gap:10px">
+            <input class="input input--lg" type="time" id="s-wstart" aria-label="Upload from" value="${esc(s.schedule?.windowStart || '18:00')}">
+            <span class="muted">to</span>
+            <input class="input input--lg" type="time" id="s-wend" aria-label="Upload until" value="${esc(s.schedule?.windowEnd || '21:00')}">
+          </div>
+          <div class="field__hint">Automatic uploads happen in this window.</div></div>
+        <div class="field"><label class="field__label" for="s-cap">Uploads per day</label>
+          <input class="input input--lg" type="number" min="1" max="10" id="s-cap" value="${esc(String(P.dailyCap ?? 2))}">
+          <div class="field__hint">Hard limit — extra uploads are blocked. The count resets at 5:30 AM. Keep it at 2.</div></div>
+        <div class="field"><label class="field__label" for="s-lang">Language of new videos</label>
+          <select class="select select--lg" id="s-lang">
+            ${LANGS.map(([v, l]) => `<option value="${v}" ${s.defaults?.language === v ? 'selected' : ''}>${l}</option>`).join('')}
+          </select></div>
+      </div>
+    </section>
 
-        <!-- Engines -->
-        <div class="card">
-          <div class="card__head">${icon('zap')}<h2>Engines</h2></div>
-          <div class="card__body">
-            <div class="switch-row">
-              <div class="switch-row__text"><strong>Engine A — Gemini YouTube Automation: enabled</strong>
-                <span>Controls whether this engine receives new scheduled or manual jobs. Jobs already running are unaffected.</span></div>
-              <button class="switch ${(s.engines?.gemini?.enabled ?? true) ? 'is-on' : ''}" id="s-eng-gemini" aria-label="Toggle Engine A"></button>
-            </div>
-            <div class="switch-row">
-              <div class="switch-row__text"><strong>Engine B — Verticals v3: enabled</strong>
-                <span>Same semantics as Engine A. Fallback dispatch also respects this switch.</span></div>
-              <button class="switch ${(s.engines?.verticals?.enabled ?? false) ? 'is-on' : ''}" id="s-eng-verticals" aria-label="Toggle Engine B"></button>
-            </div>
-            <div class="grid grid--2" style="gap:14px;margin-top:14px">
-              <div class="field"><label class="field__label">Default engine (new topics)</label>
-                <select class="select" id="s-default-engine">
-                  <option value="gemini" ${s.defaults?.engine === 'gemini' ? 'selected' : ''}>Engine A — Gemini Automation</option>
-                  <option value="verticals" ${s.defaults?.engine === 'verticals' ? 'selected' : ''}>Engine B — Verticals v3</option>
-                </select></div>
-              <div class="field"><label class="field__label">Default niche</label>
-                <select class="select" id="s-default-niche">
-                  ${['general', 'tech', 'science', 'education', 'finance', 'gaming', 'motivation'].map((n) => `<option ${s.defaults?.niche === n ? 'selected' : ''}>${n}</option>`).join('')}
-                </select></div>
-            </div>
-          </div>
-        </div>
+    <section class="card">
+      <div class="card__head">${icon('layers')}<h2>More tools</h2></div>
+      <div class="link-list">
+        <a class="link-row" href="#/calendar">${icon('calendar', 'icon--sm')}<span><strong>Calendar</strong><span>When videos were made and went up</span></span>${icon('chevronR', 'icon--sm')}</a>
+        <a class="link-row" href="#/makers">${icon('layers', 'icon--sm')}<span><strong>Video makers</strong><span>Steps, last run, automatic schedule</span></span>${icon('chevronR', 'icon--sm')}</a>
+        <a class="link-row" href="#/runs">${icon('history', 'icon--sm')}<span><strong>Technical history</strong><span>Every cloud run with steps and logs</span></span>${icon('chevronR', 'icon--sm')}</a>
+        <a class="link-row" href="#/analytics">${icon('chart', 'icon--sm')}<span><strong>Channel stats</strong><span>Views and watch time (not connected yet)</span></span>${icon('chevronR', 'icon--sm')}</a>
+      </div>
+    </section>
 
-        <!-- GitHub -->
-        <div class="card">
-          <div class="card__head">${icon('github')}<h2>GitHub repositories &amp; workflows</h2>
-            <div class="right"><button class="btn btn--secondary btn--sm" id="btn-test-gh">${icon('refresh', 'icon--sm')} Test connection</button></div>
-          </div>
-          <div class="card__body stack" style="gap:14px">
-            <div class="grid grid--2" style="gap:14px">
-              <div class="field"><label class="field__label">Engine A repository</label>
-                <input class="input mono" id="s-repo-a" value="${esc(s.github?.gemini?.repo || '')}" placeholder="owner/repo">
-                <div class="field__hint">Gemini YouTube Automation fork under your account.</div></div>
-              <div class="field"><label class="field__label">Engine A workflow file</label>
-                <input class="input mono" id="s-wf-a" value="${esc(s.github?.gemini?.workflow || '')}" placeholder="main.yml"></div>
-              <div class="field"><label class="field__label">Engine B repository</label>
-                <input class="input mono" id="s-repo-b" value="${esc(s.github?.verticals?.repo || '')}" placeholder="owner/repo">
-                <div class="field__hint">Verticals v3 fork (with the fixed image-generation module).</div></div>
-              <div class="field"><label class="field__label">Engine B workflow file</label>
-                <input class="input mono" id="s-wf-b" value="${esc(s.github?.verticals?.workflow || '')}" placeholder="verticals.yml"></div>
-              <div class="field"><label class="field__label">Branch</label>
-                <input class="input mono" id="s-branch" value="${esc(s.github?.branch || 'dypol-integration')}" placeholder="dypol-integration"></div>
-              <div class="field"><label class="field__label">GitHub token (server secret)</label>
-                <input class="input" value="${s.github?.tokenConfigured ? '••••••••  (configured)' : 'Not configured'}" disabled>
-                <div class="field__hint">Set as the <span class="mono">GITHUB_TOKEN</span> secret on Cloudflare Pages. Fine-grained PAT: Actions r/w + Contents r/w (control file) on the two forks.</div></div>
-            </div>
-          </div>
-        </div>
+    <div class="sec-title" style="margin-top:22px">Advanced</div>
+    <div class="stack-sm">
+    ${group('adv-makers', 'video', 'Video makers', 'switch makers on or off', `
+      ${sw('s-eng-gemini', s.engines?.gemini?.enabled ?? true, '“Long video + Short” maker', 'When off, it never starts — not by hand and not automatically. Videos already being made finish.', 'Long video plus Short maker on or off')}
+      ${sw('s-eng-verticals', s.engines?.verticals?.enabled ?? false, '“Short only” maker', 'Same as above. The backup step also respects this switch.', 'Short only maker on or off')}
+      <div class="field" style="margin-top:10px"><label class="field__label" for="s-format">Default video shape</label>
+        <select class="select" id="s-format">
+          <option value="per_engine" ${s.defaults?.format === 'per_engine' ? 'selected' : ''}>Each maker’s own (16:9 + Short, or 9:16)</option>
+          <option value="long-form" ${s.defaults?.format === 'long-form' ? 'selected' : ''}>Long video 16:9</option>
+          <option value="short" ${s.defaults?.format === 'short' ? 'selected' : ''}>Short 9:16</option>
+        </select></div>`, openWhich === 'makers')}
 
-        <!-- Orchestration -->
-        <div class="card">
-          <div class="card__head">${icon('zap')}<h2>Dual-engine orchestration</h2></div>
-          <div class="card__body stack" style="gap:12px">
-            ${MODES.map((m) => `
-              <label class="card card--pad row" style="cursor:pointer;gap:12px;align-items:flex-start;${s.orchestration?.mode === m.id ? 'border-color:var(--accent);background:var(--accent-soft)' : ''}">
-                <input type="radio" name="orch-mode" value="${m.id}" ${s.orchestration?.mode === m.id ? 'checked' : ''} style="margin-top:3px;accent-color:var(--accent)">
-                <div><strong class="small">${esc(m.name)}</strong>
-                  <div class="tiny muted" style="margin-top:3px;line-height:1.6">${esc(m.desc)}</div></div>
-              </label>`).join('')}
-            <div class="grid grid--2" style="gap:14px">
-              <div class="field"><label class="field__label">Fallback policy</label>
-                <select class="select" id="s-fallback">
-                  <option value="on_failure" ${s.orchestration?.fallback === 'on_failure' ? 'selected' : ''}>Fallback only on genuine failure</option>
-                  <option value="never" ${s.orchestration?.fallback === 'never' ? 'selected' : ''}>Never fall back</option>
-                  <option value="on_failure_and_duplicate" ${s.orchestration?.fallback === 'on_failure_and_duplicate' ? 'selected' : ''}>Fallback on failure or blocked duplicate</option>
-                </select></div>
-              <div class="field"><label class="field__label">Alternate schedule (Mode 2)</label>
-                <select class="select" id="s-alt">
-                  <option value="days" ${s.orchestration?.alternate === 'days' ? 'selected' : ''}>Alternate by day (odd/even)</option>
-                  <option value="run" ${s.orchestration?.alternate === 'run' ? 'selected' : ''}>Alternate by run index</option>
-                  <option value="manual" ${s.orchestration?.alternate === 'manual' ? 'selected' : ''}>Manual assignment only</option>
-                </select></div>
-              <div class="field"><label class="field__label">Maximum concurrency</label>
-                <input class="input" type="number" min="1" max="3" id="s-concurrency" value="${esc(String(s.orchestration?.maxConcurrency ?? 1))}">
-                <div class="field__hint">Server-side limit on simultaneously active jobs (1–3). Excess dispatch requests are refused, not queued silently.</div></div>
-              <div class="field"><label class="field__label">Retry count (failed runs)</label>
-                <input class="input" type="number" min="0" max="5" id="s-retry" value="${esc(String(s.orchestration?.retryLimit ?? 2))}">
-                <div class="field__hint">Bounded retries for retry-safe failures. Non-retryable errors (permissions, config) are never auto-retried.</div></div>
-            </div>
-          </div>
-        </div>
+    ${group('adv-plan', 'zap', 'Video maker plan', 'used by “Let the system choose” and automatic videos', `
+      <div class="stack-sm">
+      ${MODES.map((m) => `
+        <label class="choice ${s.orchestration?.mode === m.id ? 'is-on' : ''}">
+          <input type="radio" name="orch-mode" value="${m.id}" ${s.orchestration?.mode === m.id ? 'checked' : ''}>
+          <span><strong>${esc(m.name)}</strong><span class="muted">${esc(m.desc)}</span></span>
+        </label>`).join('')}
+      </div>
+      <div class="grid grid--2" style="gap:14px;margin-top:14px">
+        <div class="field"><label class="field__label" for="s-fallback">If the main maker fails</label>
+          <select class="select" id="s-fallback">
+            <option value="on_failure" ${s.orchestration?.fallback === 'on_failure' ? 'selected' : ''}>Try the backup maker</option>
+            <option value="never" ${s.orchestration?.fallback === 'never' ? 'selected' : ''}>Stop and tell me</option>
+            <option value="on_failure_and_duplicate" ${s.orchestration?.fallback === 'on_failure_and_duplicate' ? 'selected' : ''}>Try the backup, also when the topic was a repeat</option>
+          </select></div>
+        <div class="field"><label class="field__label" for="s-alt">How they take turns</label>
+          <select class="select" id="s-alt">
+            <option value="days" ${s.orchestration?.alternate === 'days' ? 'selected' : ''}>Swap every day</option>
+            <option value="run" ${s.orchestration?.alternate === 'run' ? 'selected' : ''}>Swap every run</option>
+            <option value="manual" ${s.orchestration?.alternate === 'manual' ? 'selected' : ''}>Only when I choose</option>
+          </select>
+          <div class="field__hint">Only used by “Take turns”.</div></div>
+        <div class="field"><label class="field__label" for="s-concurrency">Videos made at the same time</label>
+          <input class="input" type="number" min="1" max="3" id="s-concurrency" value="${esc(String(s.orchestration?.maxConcurrency ?? 1))}">
+          <div class="field__hint">1 to 3. Extra starts are refused, not queued.</div></div>
+        <div class="field"><label class="field__label" for="s-retry">Automatic tries after a failure</label>
+          <input class="input" type="number" min="0" max="5" id="s-retry" value="${esc(String(s.orchestration?.retryLimit ?? 2))}">
+          <div class="field__hint">Only for safe-to-repeat failures. Setup problems are never retried. Each video still gets at most 2 tries by hand.</div></div>
+      </div>`, openWhich === 'plan')}
 
-        <!-- Publishing safeguards -->
-        <div class="card">
-          <div class="card__head">${icon('shield')}<h2>Publishing safeguards</h2></div>
-          <div class="card__body">
-            <div class="switch-row">
-              <div class="switch-row__text"><strong>Review required before publishing</strong>
-                <span>Videos must be approved in the Content Queue before upload. Recommended default.</span></div>
-              <button class="switch ${s.publishing?.reviewRequired ? 'is-on' : ''}" id="s-review" aria-label="Toggle review required"></button>
-            </div>
-            <div class="switch-row">
-              <div class="switch-row__text"><strong>Draft-only mode</strong>
-                <span>Generate and save production results without uploading anything. Overrides all other publish paths.</span></div>
-              <button class="switch ${s.publishing?.draftMode ? 'is-on' : ''}" id="s-draft" aria-label="Toggle draft only"></button>
-            </div>
-            <div class="switch-row">
-              <div class="switch-row__text"><strong>Automatic publishing</strong>
-                <span>Only takes effect after review-required has been tested end-to-end. Duplicate checks, caps and locks remain active.</span></div>
-              <button class="switch ${s.publishing?.autoPublish ? 'is-on' : ''}" id="s-auto" aria-label="Toggle auto publish"></button>
-            </div>
-            <div class="switch-row">
-              <div class="switch-row__text"><strong>Duplicate prevention (normalised topic matching)</strong>
-                <span>Blocks publishing when the normalised topic matches an existing active or published video across both engines.</span></div>
-              <button class="switch ${s.publishing?.dedupe ? 'is-on' : ''}" id="s-dedupe" aria-label="Toggle duplicate prevention"></button>
-            </div>
-            <div class="switch-row">
-              <div class="switch-row__text"><strong>Strict publishing lock</strong>
-                <span>Serialises publish attempts so concurrent jobs cannot bypass the duplicate check or daily cap.</span></div>
-              <button class="switch ${s.publishing?.publishLock ? 'is-on' : ''}" id="s-lock" aria-label="Toggle publishing lock"></button>
-            </div>
-            <div class="grid grid--2" style="gap:14px;margin-top:14px">
-              <div class="field"><label class="field__label">Default upload visibility</label>
-                <select class="select" id="s-privacy">
-                  <option value="private" ${s.publishing?.visibility === 'private' ? 'selected' : ''}>Private (recommended for tests)</option>
-                  <option value="unlisted" ${s.publishing?.visibility === 'unlisted' ? 'selected' : ''}>Unlisted</option>
-                  <option value="public" ${s.publishing?.visibility === 'public' ? 'selected' : ''}>Public</option>
-                </select>
-                <div class="field__hint">Verified in the workflow's upload step env (YOUTUBE_PRIVACY_STATUS), not just displayed here.</div></div>
-              <div class="field"><label class="field__label">Daily publishing cap</label>
-                <input class="input" type="number" min="1" max="10" id="s-cap" value="${esc(String(s.publishing?.dailyCap ?? 2))}">
-                <div class="field__hint">Server-side hard limit on uploads per channel per day (IST), counting in-flight uploads.</div></div>
-              <div class="field"><label class="field__label">Default video format</label>
-                <select class="select" id="s-format">
-                  <option value="per_engine" ${s.defaults?.format === 'per_engine' ? 'selected' : ''}>Per engine (16:9 + Shorts / 9:16)</option>
-                  <option value="long-form" ${s.defaults?.format === 'long-form' ? 'selected' : ''}>Long-form 16:9</option>
-                  <option value="short" ${s.defaults?.format === 'short' ? 'selected' : ''}>Short 9:16</option>
-                </select></div>
-              <div class="field"><label class="field__label">Default language</label>
-                <select class="select" id="s-lang">
-                  ${['en', 'hi', 'es', 'pt', 'de', 'fr', 'ja', 'ko'].map((l) => `<option value="${l}" ${s.defaults?.language === l ? 'selected' : ''}>${l}</option>`).join('')}
-                </select></div>
-            </div>
-          </div>
-        </div>
+    ${group('adv-publish', 'shield', 'Publishing rules', 'safety switches', `
+      ${sw('s-review', P.reviewRequired, 'I check every video before it goes up', 'Strongly recommended. Videos wait in “To check” until you approve them.', 'Check every video before publishing')}
+      ${sw('s-draft', P.draftMode, 'Make drafts only', 'Videos are made but nothing is sent to YouTube, even after you approve. Use when testing.', 'Make drafts only')}
+      ${sw('s-auto', P.autoPublish, 'Publish without me', 'Keep OFF. Only works after “I check every video” was tested end to end. Limits still apply.', 'Publish without me')}
+      ${sw('s-dedupe', P.dedupe, 'Block repeat topics', 'Stops a video whose topic matches one you already made or are making — slightly reworded ones too.', 'Block repeat topics')}
+      ${sw('s-lock', P.publishLock, 'One upload at a time', 'Uploads wait for each other so the daily limit and repeat check can’t be skipped.', 'One upload at a time')}
+      <div class="field" style="margin-top:10px"><label class="field__label" for="s-privacy">Who can see new uploads</label>
+        <select class="select" id="s-privacy">
+          <option value="private" ${vis === 'private' ? 'selected' : ''}>Private — only you</option>
+          <option value="unlisted" ${vis === 'unlisted' ? 'selected' : ''}>Unlisted — anyone with the link (current rule)</option>
+          <option value="public" ${vis === 'public' ? 'selected' : ''}>Public — everyone</option>
+        </select>
+        <div class="field__hint">Keep Unlisted. You can make a video Public later in YouTube Studio.</div></div>`, openWhich === 'publish')}
 
-        <!-- Scheduling -->
-        <div class="card">
-          <div class="card__head">${icon('calendar')}<h2>Scheduling</h2></div>
-          <div class="card__body grid grid--2" style="gap:14px">
-            <div class="field"><label class="field__label">Timezone</label>
-              <input class="input" id="s-tz" value="${esc(s.schedule?.timezone || 'Asia/Kolkata')}" disabled>
-              <div class="field__hint">The console operates in Asia/Kolkata (IST). Schedule pauses write dypol-control.json to both forks so workflows honour them.</div></div>
-            <div class="field"><label class="field__label">Frequency</label>
-              <select class="select" id="s-freq">
-                <option value="daily" ${s.schedule?.frequency === 'daily' ? 'selected' : ''}>Daily</option>
-                <option value="twice_daily" ${s.schedule?.frequency === 'twice_daily' ? 'selected' : ''}>Twice daily</option>
-                <option value="weekdays" ${s.schedule?.frequency === 'weekdays' ? 'selected' : ''}>Weekdays only</option>
-                <option value="manual" ${s.schedule?.frequency === 'manual' ? 'selected' : ''}>Manual only</option>
-              </select>
-              <div class="field__hint">Cadence metadata for the native GitHub cron. Changing the exact cron time requires editing the workflow file (documented) — GitHub schedules can fire late.</div></div>
-            <div class="field"><label class="field__label">Publishing window start</label>
-              <input class="input" type="time" id="s-wstart" value="${esc(s.schedule?.windowStart || '18:00')}"></div>
-            <div class="field"><label class="field__label">Publishing window end</label>
-              <input class="input" type="time" id="s-wend" value="${esc(s.schedule?.windowEnd || '21:00')}"></div>
-          </div>
+    ${group('adv-schedule', 'calendar', 'Automatic schedule', 'how often videos start by themselves', `
+      <div class="grid grid--2" style="gap:14px">
+        <div class="field"><label class="field__label" for="s-freq">How often</label>
+          <select class="select" id="s-freq">
+            <option value="daily" ${s.schedule?.frequency === 'daily' ? 'selected' : ''}>Every day</option>
+            <option value="twice_daily" ${s.schedule?.frequency === 'twice_daily' ? 'selected' : ''}>Twice a day</option>
+            <option value="weekdays" ${s.schedule?.frequency === 'weekdays' ? 'selected' : ''}>Weekdays only</option>
+            <option value="manual" ${s.schedule?.frequency === 'manual' ? 'selected' : ''}>Only when I tap Make</option>
+          </select>
+          <div class="field__hint">The exact start time is set in the video maker itself and can run a little late.</div></div>
+        <div class="field"><label class="field__label" for="s-tz">Time zone</label>
+          <input class="input" id="s-tz" value="${esc(s.schedule?.timezone || 'Asia/Kolkata')}" disabled>
+          <div class="field__hint">Fixed to India time (IST).</div></div>
+      </div>`, openWhich === 'schedule')}
+
+    ${group('adv-cloud', 'github', 'Cloud connection', 'where the video makers live', `
+      <div class="row" style="justify-content:flex-end;margin-bottom:10px"><button type="button" class="btn btn--secondary btn--sm" id="btn-test-gh">${icon('refresh', 'icon--sm')} Test connection</button></div>
+      <div class="grid grid--2" style="gap:14px">
+        <div class="field"><label class="field__label" for="s-repo-a">“Long video + Short” project</label>
+          <input class="input mono" id="s-repo-a" value="${esc(s.github?.gemini?.repo || '')}" placeholder="owner/repo"></div>
+        <div class="field"><label class="field__label" for="s-wf-a">Its start file</label>
+          <input class="input mono" id="s-wf-a" value="${esc(s.github?.gemini?.workflow || '')}" placeholder="main.yml"></div>
+        <div class="field"><label class="field__label" for="s-repo-b">“Short only” project</label>
+          <input class="input mono" id="s-repo-b" value="${esc(s.github?.verticals?.repo || '')}" placeholder="owner/repo"></div>
+        <div class="field"><label class="field__label" for="s-wf-b">Its start file</label>
+          <input class="input mono" id="s-wf-b" value="${esc(s.github?.verticals?.workflow || '')}" placeholder="verticals.yml"></div>
+        <div class="field"><label class="field__label" for="s-branch">Branch</label>
+          <input class="input mono" id="s-branch" value="${esc(s.github?.branch || 'dypol-integration')}" placeholder="dypol-integration"></div>
+        <div class="field"><label class="field__label">Connection key</label>
+          <input class="input" value="${s.github?.tokenConfigured ? '••••••••  (set)' : 'Not set'}" disabled>
+          <div class="field__hint">Kept on the server and never shown here. Only change the fields above if the projects moved.</div></div>
+      </div>`, openWhich === 'cloud')}
+
+    ${group('status', 'server', 'System status', 'limits, storage and connections', `
+      ${quotaPanelShell('quota-panel-settings')}
+      <div class="card" style="margin-top:12px">
+        <div class="card__head">${icon('server')}<h2>Connections</h2></div>
+        <div class="card__body qc">
+          ${[
+            ['Console mode', h.mode === 'demo' ? 'warn' : 'ok', h.mode === 'demo' ? 'Demo (pretend data)' : 'Live'],
+            ['Video list storage', h.db === 'ok' ? 'ok' : 'off', h.db === 'ok' ? 'Connected' : 'Not connected'],
+            ['Cloud connection key', !h.githubToken ? 'off' : h.githubTokenValid ? (expSoon(h.githubTokenExpiresAt) ? 'warn' : 'ok') : 'off',
+              !h.githubToken ? 'Missing' : h.githubTokenValid ? (h.githubTokenExpiresAt ? `Working · expires ${fmtDay(h.githubTokenExpiresAt)}` : 'Working') : (h.githubTokenMessage || 'Refused')],
+            ['Progress updates from the cloud', h.webhookSecret ? 'ok' : 'off', h.webhookSecret ? 'Set up' : 'Missing'],
+            ['“Long video + Short” sign-ins', ev(h.engines?.gemini) ? 'ok' : 'warn', ev(h.engines?.gemini) ? `Working · last success ${fmtDay(ev(h.engines?.gemini))}` : 'Not proven yet'],
+            ['“Short only” sign-ins', ev(h.engines?.verticals) ? 'ok' : 'warn', ev(h.engines?.verticals) ? `Working · last success ${fmtDay(ev(h.engines?.verticals))}` : 'Not proven yet'],
+            ['YouTube upload', h.youtubeLastUpload ? 'ok' : 'warn', h.youtubeLastUpload ? `Working · last upload ${fmtDay(h.youtubeLastUpload)}` : 'Proven at the first upload'],
+            ['YouTube stats', h.youtubeAnalytics ? 'ok' : 'off', h.youtubeAnalytics ? 'Connected' : 'Not connected yet'],
+            ['One upload at a time', P.publishLock ? 'ok' : 'off', P.publishLock ? 'On' : 'Off'],
+          ].map(([name, state, label]) => `
+            <div class="qc__row ${state === 'ok' ? '' : state === 'warn' ? 'is-warn' : 'is-off'}">
+              ${icon(state === 'ok' ? 'check' : state === 'warn' ? 'alert' : 'info', 'icon--sm')}
+              <span>${esc(name)}</span><span class="spacer"></span>
+              <span class="pill">${esc(label)}</span>
+            </div>`).join('')}
         </div>
       </div>
-
-      <!-- Right rail: health -->
-      <div class="stack rail">
-        ${quotaPanelShell('quota-panel-settings')}
-        <div class="card">
-          <div class="card__head">${icon('server')}<h2>System health</h2></div>
-          <div class="card__body qc">
-            ${[
-              ['Backend mode', h.mode === 'demo' ? 'warn' : 'ok', h.mode === 'demo' ? 'Demo (local)' : 'Live'],
-              ['Job registry (D1)', h.db === 'ok' ? 'ok' : 'off', h.db === 'ok' ? 'Connected' : 'Not connected'],
-              ['GitHub token', !h.githubToken ? 'off' : h.githubTokenValid ? (expSoon(h.githubTokenExpiresAt) ? 'warn' : 'ok') : 'off',
-                !h.githubToken ? 'Missing' : h.githubTokenValid ? (h.githubTokenExpiresAt ? `Valid · expires ${fmtDay(h.githubTokenExpiresAt)}` : 'Valid') : (h.githubTokenMessage || 'Rejected')],
-              ['Webhook secret', h.webhookSecret ? 'ok' : 'off', h.webhookSecret ? 'Configured' : 'Missing'],
-              ['Gemini engine credentials', ev(h.engines?.gemini) ? 'ok' : 'warn', ev(h.engines?.gemini) ? `Verified by last successful run · ${fmtDay(ev(h.engines?.gemini))}` : 'Held by engine · not yet proven'],
-              ['Verticals engine credentials', ev(h.engines?.verticals) ? 'ok' : 'warn', ev(h.engines?.verticals) ? `Verified by last successful run · ${fmtDay(ev(h.engines?.verticals))}` : 'Held by engine · not yet proven'],
-              ['YouTube upload (OAuth)', h.youtubeLastUpload ? 'ok' : 'warn', h.youtubeLastUpload ? `Verified by last upload · ${fmtDay(h.youtubeLastUpload)}` : 'Held by engine · proven at first upload'],
-              ['YouTube Analytics', h.youtubeAnalytics ? 'ok' : 'off', h.youtubeAnalytics ? 'Connected' : 'Not connected'],
-              ['Publishing lock', s.publishing?.publishLock ? 'ok' : 'off', s.publishing?.publishLock ? 'Enabled (by setting)' : 'Disabled (by setting)'],
-            ].map(([name, state, label]) => `
-              <div class="qc__row ${state === 'ok' ? '' : state === 'warn' ? 'is-warn' : 'is-off'}">
-                ${icon(state === 'ok' ? 'check' : state === 'warn' ? 'alert' : 'info', 'icon--sm')}
-                <span>${esc(name)}</span><span class="spacer"></span>
-                <span class="pill">${esc(label)}</span>
-              </div>`).join('')}
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card__head">${icon('youtube')}<h2>YouTube channel</h2>
-            <div class="right"><button class="btn btn--secondary btn--sm" id="btn-test-yt">${icon('refresh', 'icon--sm')} Test</button></div>
-          </div>
-          <div class="card__body stack" style="gap:10px">
-            <div class="row">${statusPill(yt.state)}</div>
-            ${yt.state === 'verified-by-upload' ? `
-              <div class="callout">${icon('check')}<div><strong>Uploads work.</strong> The YouTube sign-in lives in the engine repositories (not in the console); the last successful upload on ${esc(fmtDay(yt.lastUpload))} proves it.</div></div>`
-            : `
-              <div class="callout">${icon('info')}<div><strong>Held by the engines.</strong> YouTube sign-in is stored as engine repository secrets, so the console cannot test it directly — the first successful upload proves it.</div></div>`}
-            <dl class="kv">
-              <dt>Channel</dt><dd>${esc(h.channelName || '—')}</dd>
-              <dt>Upload visibility</dt><dd>${esc(s.publishing?.visibility || 'private')}</dd>
-              <dt>Quota note</dt><dd class="tiny muted">YouTube Data API default quota is 10,000 units/day (≈6 uploads).</dd>
-            </dl>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card__head">${icon('sparkles')}<h2>Provider readiness</h2>
-            <div class="right"><button class="btn btn--secondary btn--sm" id="btn-test-gemini">${icon('refresh', 'icon--sm')} Test</button></div>
-          </div>
-          <div class="card__body">
-            <div class="tiny muted" style="line-height:1.7">Checks Gemini availability server-side without exposing the key. A valid key does not guarantee a specific model is available, free, or un-billed — model IDs retire often (see docs/FREE_TIER.md).</div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card__head">${icon('pause')}<h2>Automation control</h2></div>
-          <div class="card__body stack" style="gap:10px">
-            <div class="switch-row" style="padding:6px 0">
-              <div class="switch-row__text"><strong>Pause future scheduling</strong>
-                <span>Prevents scheduled runs (via dypol-control.json on both forks). Preserves generated videos, records, credentials and configuration.</span></div>
-              <button class="switch ${s.schedule?.automationPaused ? 'is-on' : ''}" id="s-pause" aria-label="Toggle automation pause"></button>
-            </div>
-            <button class="btn btn--secondary btn--block" id="btn-test-dedupe">${icon('copy', 'icon--sm')} Run duplicate-check self test</button>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card__head">${icon('info')}<h2>About</h2></div>
-          <div class="card__body">
-            <dl class="kv">
-              <dt>Product</dt><dd>DYPOL Creator Console</dd>
-              <dt>Parent brand</dt><dd>DYPOL LABS</dd>
-              <dt>Version</dt><dd>1.0.0</dd>
-              <dt>Console mode</dt><dd>${esc(h.mode || 'unknown')}</dd>
-            </dl>
-          </div>
+      <div class="card" style="margin-top:12px">
+        <div class="card__head">${icon('youtube')}<h2>YouTube channel</h2>
+          <div class="right"><button type="button" class="btn btn--secondary btn--sm" id="btn-test-yt">${icon('refresh', 'icon--sm')} Test</button></div></div>
+        <div class="card__body stack" style="gap:10px">
+          <div class="row">${statusPill(yt.state)}</div>
+          <div class="small muted">${yt.state === 'verified-by-upload'
+            ? `Uploads work — the last one went up on ${esc(fmtDay(yt.lastUpload))}. The YouTube sign-in is kept inside the video makers, not here.`
+            : 'The YouTube sign-in is kept inside the video makers, so it can only be proven by the first successful upload.'}</div>
+          <dl class="kv">
+            <dt>Channel</dt><dd>${esc(h.channelName || '—')}</dd>
+            <dt>New uploads</dt><dd>${esc(VIS[vis] || vis)}</dd>
+            <dt>YouTube’s own limit</dt><dd class="tiny muted">About 6 uploads a day (10,000 units).</dd>
+          </dl>
         </div>
       </div>
+      <div class="card" style="margin-top:12px">
+        <div class="card__head">${icon('sparkles')}<h2>Checks</h2></div>
+        <div class="card__body stack-sm">
+          <div class="more-row"><div><strong>AI writer check</strong><span class="muted">Checks the AI writing service is reachable. A working key doesn’t guarantee a model is free.</span></div>
+            <button type="button" class="btn btn--secondary btn--sm" id="btn-test-gemini">${icon('refresh', 'icon--sm')} Test</button></div>
+          <div class="more-row"><div><strong>Repeat-topic check</strong><span class="muted">Makes sure the repeat-topic blocker works.</span></div>
+            <button type="button" class="btn btn--secondary btn--sm" id="btn-test-dedupe">${icon('copy', 'icon--sm')} Test</button></div>
+        </div>
+      </div>`, openWhich === 'status')}
+
+    ${group('adv-about', 'info', 'About', 'version', `
+      <dl class="kv">
+        <dt>Product</dt><dd>DYPOL Creator Console</dd>
+        <dt>Made by</dt><dd>DYPOL LABS</dd>
+        <dt>Version</dt><dd>2.0 (simple design)</dd>
+        <dt>Mode</dt><dd>${esc(h.mode === 'demo' ? 'Demo' : h.mode ? 'Live' : 'unknown')}</dd>
+      </dl>
+      <div class="field__hint">Passwords and keys live only on the server and in the cloud projects. They are never sent to this page or saved on your phone.</div>`)}
     </div>
 
-    <div class="footer-note">
-      <span class="brand-lockup"><span class="mark">${icon('play', 'icon--sm')}</span><strong>DYPOL LABS</strong></span>
-      <span>DYPOL Creator Console v1.0.0</span><span>·</span><span>Build · Automate · Create</span>
+    <div class="save-bar">
+      <span class="save-bar__hint" id="save-hint">Changes are saved when you tap Save.</span>
+      <button class="btn btn--primary btn--lg" id="btn-save">${icon('check', 'icon--sm')} Save changes</button>
     </div>`;
 
+  const dirty = () => {
+    const hint = root.querySelector('#save-hint');
+    if (hint) { hint.textContent = 'You have unsaved changes.'; hint.classList.add('is-dirty'); }
+  };
+  root.querySelectorAll('input, select').forEach((el) => el.addEventListener('change', dirty));
+  root.querySelectorAll('input[name="orch-mode"]').forEach((r) => r.addEventListener('change', () => {
+    root.querySelectorAll('input[name="orch-mode"]').forEach((x) => x.closest('.choice').classList.toggle('is-on', x.checked));
+  }));
   const toggle = (id) => {
     const el = root.querySelector(id);
-    if (el) el.onclick = () => el.classList.toggle('is-on');
+    if (el) el.onclick = () => { el.classList.toggle('is-on'); el.setAttribute('aria-checked', String(el.classList.contains('is-on'))); dirty(); };
   };
   ['#s-review', '#s-auto', '#s-dedupe', '#s-lock', '#s-pause', '#s-draft', '#s-eng-gemini', '#s-eng-verticals'].forEach(toggle);
 
@@ -323,25 +301,33 @@ async function refresh() {
           automationPaused: on('#s-pause'),
         },
       });
-      toast('Settings saved', res.message || 'Configuration updated.', 'ok');
+      toast('Saved', 'Your settings are updated.', 'ok');
+      Object.assign(UI_PREFS, {
+        visibility: val('#s-privacy'), dailyCap: Number(val('#s-cap')), defaultEngine: val('#s-default-engine'),
+        defaultNiche: val('#s-default-niche'), paused: on('#s-pause'), reviewRequired: on('#s-review'),
+        engines: { gemini: { enabled: on('#s-eng-gemini') }, verticals: { enabled: on('#s-eng-verticals') } },
+      });
       await refresh();
     } catch (err) {
       btn.disabled = false;
-      toast('Save failed', err.message, 'bad');
+      errorToast(err, 'Couldn’t save');
     }
   };
 
   const testTarget = async (target, label) => {
     try {
       const res = await api.testConnection(target);
-      toast(label, res.message, res.ok ? 'ok' : 'warn');
-    } catch (err) { toast(`${label} failed`, err.message, 'bad'); }
+      toast(res.ok ? `${label}: working` : `${label}: needs attention`, res.message, res.ok ? 'ok' : 'warn', 7000);
+    } catch (err) { errorToast(err, `${label} didn’t work`); }
   };
-  mountQuotaPanel(root, 'quota-panel-settings');
-  root.querySelector('#btn-test-gh').onclick = () => testTarget('github', 'GitHub connection');
-  root.querySelector('#btn-test-yt').onclick = () => testTarget('youtube', 'YouTube connection');
-  root.querySelector('#btn-test-gemini').onclick = () => testTarget('gemini', 'Gemini readiness');
-  root.querySelector('#btn-test-dedupe').onclick = () => testTarget('dedupe', 'Duplicate-check self test');
+  root.querySelector('#btn-test-gh').onclick = () => testTarget('github', 'Cloud connection');
+  root.querySelector('#btn-test-yt').onclick = () => testTarget('youtube', 'YouTube');
+  root.querySelector('#btn-test-gemini').onclick = () => testTarget('gemini', 'AI writer');
+  root.querySelector('#btn-test-dedupe').onclick = () => testTarget('dedupe', 'Repeat-topic check');
+  const st = root.querySelector('#status');
+  if (openWhich) root.querySelector(`#${openWhich === 'status' ? 'status' : `adv-${openWhich}`}`)?.scrollIntoView({ block: 'start' });
+  if (st.open) mountQuotaPanel(root, 'quota-panel-settings');
+  else st.addEventListener('toggle', () => { if (st.open) mountQuotaPanel(root, 'quota-panel-settings'); }, { once: true });
 }
 
 const fmtDay = (t) => { const d = new Date(t); return Number.isNaN(d.getTime()) ? String(t || '') : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }); };

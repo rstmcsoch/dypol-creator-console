@@ -1,23 +1,32 @@
-/* Content Queue — review, approve, publish with real safeguards.
-   AUDIT: full lifecycle status set, niche/date filters, created dates,
-   error categories, retry with attempt history, editable metadata that IS
-   what gets published, disabled actions always explain themselves. */
+/* Videos — "To check" first, then "Being made" and "All".
+   Tapping a video opens the check screen: player on top, what will go to
+   YouTube, and a sticky action bar (Approve & publish / Redo / Reject).
+   Every technical detail of the old Content Queue (logs, steps, quality
+   checks, IDs, visual sources, full-quality files) is kept under "Details".
+   Safeguards unchanged: approve = one confirm then approve+publish; reject
+   needs a reason; retries max 2; the server re-checks cap/duplicates/lock. */
 import { api } from '../api.js';
 import {
-  icon, esc, statusPill, enginePill, typePill, thumb, fmtDateTime, fmtAgo, progressBar,
-  toast, openDrawer, closeDrawer, renderLogs, emptyState, confirmModal, openModal, closeModal, qcRow,
-  friendlyStage, failureLabel, disabledAttr,
+  icon, esc, statusPill, thumb, fmtDateTime, fmtAgo, toast, openDrawer, closeDrawer, renderLogs,
+  emptyState, confirmModal, openModal, closeModal, qcRow, friendlyStage, failureLabel, failureNext,
+  disabledAttr, makerName, statusInfo, errorToast, UI_PREFS, visWord,
 } from '../ui.js';
-import { mountProgress } from '../progress.js';
+import { mountProgress, progressLine, fetchProgress } from '../progress.js';
 
 // Every job state belongs to exactly one chip, so the chips add up to "All".
 const STATUS_TABS = [
-  ['', 'All'], ['queued', 'Queued'], ['dispatched,running,generating,rendering', 'In production'],
-  ['needs-review', 'Awaiting review'], ['approved,scheduled', 'Approved'], ['uploading', 'Uploading'],
-  ['published', 'Published'], ['failed', 'Failed'], ['publish_failed', 'Upload failed'],
-  ['rejected', 'Rejected'], ['superseded', 'Redone'], ['cancelled', 'Cancelled'],
+  ['', 'All'], ['queued', 'In line'], ['dispatched,running,generating,rendering', 'Being made'],
+  ['needs-review', 'Waiting for your check'], ['approved,scheduled', 'Approved'], ['uploading', 'Uploading'],
+  ['published', 'On YouTube'], ['failed', 'Didn’t finish'], ['publish_failed', 'Upload didn’t finish'],
+  ['rejected', 'Rejected'], ['superseded', 'Replaced by a redo'], ['cancelled', 'Stopped'],
 ];
+const SEGMENTS = {
+  check: 'needs-review',
+  making: 'queued,dispatched,running,generating,rendering,uploading,approved,scheduled',
+  all: '',
+};
 const REJECTABLE = ['needs-review', 'awaiting-review', 'approved', 'scheduled', 'failed', 'publish_failed', 'queued'];
+const REASONS = ['Boring or wrong topic', 'Visuals look bad', 'Voice or sound problem', 'Wrong facts', 'Title or description problem', 'Too slow or too long'];
 
 function chipCount(counts, key) {
   if (key === '') return counts.all ?? 0;
@@ -25,20 +34,21 @@ function chipCount(counts, key) {
   return key.split(',').reduce((n, s) => n + Number(by[s] || 0) + (s === 'needs-review' ? Number(by['awaiting-review'] || 0) : 0), 0);
 }
 
-function videoLinks(j) {
+function videoLinks(j, big = false) {
   const vids = (j.videos && j.videos.length) ? j.videos
     : (j.youtubeUrl ? [{ kind: j.format === 'short' ? 'short' : 'long', youtube_url: j.youtubeUrl, youtube_id: j.youtubeId }] : []);
-  const label = (k) => (k === 'short' ? 'YouTube Short' : k === 'long' ? 'Long video' : 'Video');
-  return vids.map((v) => `<a class="btn btn--ghost btn--sm" href="${esc(v.youtube_url || `https://youtu.be/${v.youtube_id}`)}" target="_blank" rel="noopener">${icon('youtube', 'icon--sm')} ${esc(label(v.kind))}</a>`).join('');
+  const label = (k) => (k === 'short' ? 'Watch the Short on YouTube' : k === 'long' ? 'Watch the video on YouTube' : 'Watch on YouTube');
+  return vids.map((v) => `<a class="btn ${big ? 'btn--primary btn--lg' : 'btn--secondary btn--sm'}" href="${esc(v.youtube_url || `https://youtu.be/${v.youtube_id}`)}" target="_blank" rel="noopener">${icon('youtube', 'icon--sm')} ${esc(label(v.kind))}</a>`).join('');
 }
 
 const NICHES = ['general', 'tech', 'science', 'education', 'finance', 'gaming', 'motivation'];
 
-let view = { tab: '', q: '', engine: '', type: '', niche: '', date: '', sort: 'newest', selected: null };
+let view = { seg: null, tab: '', q: '', engine: '', type: '', niche: '', date: '', sort: 'newest', selected: null };
 
 function filterQuery() {
   const p = new URLSearchParams();
-  if (view.tab) p.set('status', view.tab);
+  const status = view.tab || SEGMENTS[view.seg] || '';
+  if (status) p.set('status', status);
   if (view.q) p.set('q', view.q);
   if (view.engine) p.set('engine', view.engine);
   if (view.type) p.set('type', view.type);
@@ -48,165 +58,190 @@ function filterQuery() {
   return `?${p.toString()}`;
 }
 
-const friendlyStatus = (s) => ({ publish_failed: 'failed-upload', 'needs-review': 'awaiting-review' }[s] || s);
-
-/** Modal with a textarea; resolves to the text, '' (optional) or null (cancel). */
-function askText(title, help, placeholder, okLabel, optional = false) {
+/** Bottom sheet with reason chips + text. Resolves to text, '' (optional) or null (cancel). */
+function reasonSheet({ title, intro, okLabel, danger = false, optional = false, prefill = '' }) {
   return new Promise((resolve) => {
     openModal({
       title,
-      body: `<div class="field"><label class="field__label" for="ask-text">${esc(help)}</label>
-        <textarea class="textarea" id="ask-text" maxlength="2000" placeholder="${esc(optional ? '' : placeholder)}">${esc(optional ? placeholder : '')}</textarea></div>`,
-      foot: `<button class="btn btn--secondary" id="ask-cancel">Cancel</button>
-             <button class="btn btn--primary" id="ask-ok">${esc(okLabel)}</button>`,
+      body: `<p class="small">${esc(intro)}</p>
+        <div class="chips-wrap" id="rs-chips">${REASONS.map((r) => `<button type="button" class="chip chip--lg" data-r="${esc(r)}">${esc(r)}</button>`).join('')}
+          <button type="button" class="chip chip--lg" data-r="other">Other</button></div>
+        <div class="field"><label class="field__label" for="rs-text">${optional ? 'What should change? (optional)' : 'Anything to add? (optional if you picked a reason)'}</label>
+          <textarea class="textarea" id="rs-text" maxlength="2000" rows="3" placeholder="e.g. Fewer crowd clips; make the intro faster">${esc(prefill)}</textarea></div>`,
+      foot: `<button class="btn btn--secondary" id="rs-cancel">Cancel</button>
+             <button class="btn ${danger ? 'btn--danger-solid' : 'btn--primary'}" id="rs-ok">${esc(okLabel)}</button>`,
     });
-    document.getElementById('ask-cancel').onclick = () => { closeModal(); resolve(null); };
-    document.getElementById('ask-ok').onclick = () => {
-      const v = document.getElementById('ask-text').value.trim();
-      if (!optional && v.length < 3) { toast('Add a short reason', 'A few words are enough.', 'warn'); return; }
+    const picked = new Set();
+    document.getElementById('rs-chips').onclick = (e) => {
+      const c = e.target.closest('[data-r]');
+      if (!c) return;
+      const r = c.dataset.r;
+      if (picked.has(r)) picked.delete(r); else picked.add(r);
+      c.classList.toggle('is-active', picked.has(r));
+      if (r === 'other' && picked.has(r)) document.getElementById('rs-text').focus();
+    };
+    document.getElementById('rs-cancel').onclick = () => { closeModal(); resolve(null); };
+    document.getElementById('rs-ok').onclick = () => {
+      const text = document.getElementById('rs-text').value.trim();
+      const chips = [...picked].filter((r) => r !== 'other');
+      const v = [chips.join('; '), text].filter(Boolean).join(' — ');
+      if (!optional && v.length < 3) { toast('Pick a reason', 'Tap one of the reasons or type a few words.', 'warn'); return; }
       closeModal(); resolve(v);
     };
   });
 }
 
-function jobRow(j) {
-  const err = ['failed', 'publish_failed'].includes(j.status) && j.error;
+function card(j) {
+  const info = statusInfo(j.status);
+  const err = ['failed', 'publish_failed'].includes(j.status);
   return `
-  <div class="table__row is-clickable ${view.selected === j.id ? 'is-selected' : ''}" role="row" data-job="${esc(j.id)}"
-       style="grid-template-columns:28px 76px minmax(0,2.2fr) 1fr .9fr 1.2fr 1.05fr 1.1fr">
-    <div class="cell-check"><span class="check ${view.selected === j.id ? 'is-on' : ''}">${view.selected === j.id ? icon('check', 'icon--sm') : ''}</span></div>
-    <div class="cell-main">${thumb(j)}</div>
-    <div class="cell-main">
-      <div class="cell-title truncate">${esc(j.title)}</div>
-      <div class="cell-sub truncate">${esc(j.topic || '')}</div>
-      <div class="row" style="gap:5px;margin-top:4px;flex-wrap:wrap">
-        ${(j.tags || []).slice(0, 3).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}
-        ${(j.tags || []).length > 3 ? `<span class="tag">+${j.tags.length - 3}</span>` : ''}
-        ${j.attempt > 1 ? `<span class="tag">redo #${j.attempt}</span>` : ''}
-        ${j.demo ? '<span class="pill pill--accent">DEMO</span>' : ''}
-      </div>
-    </div>
-    <div data-col="Engine">${enginePill(j.engine)}<div class="cell-sub" style="margin-top:3px">${typePill(j.format)}</div></div>
-    <div data-col="Progress">
-      <div style="width:100%">${progressBar(j.progress ?? (j.status === 'published' ? 100 : j.status === 'queued' ? 0 : null), j.status === 'failed' ? 'red' : j.engine === 'verticals' ? 'blue' : '')}</div>
-      <div class="cell-sub">${esc(friendlyStage(j.stage) || '—')}</div>
-    </div>
-    <div data-col="Status">${statusPill(j.status)}
-      ${err ? `<div class="cell-sub" style="color:var(--red)">${esc(failureLabel(j.errorCategory) || String(j.error).slice(0, 60))}</div>` : ''}
-      ${j.status === 'published' && (j.videos?.length || j.youtubeUrl) ? `<div class="cell-sub">${(j.videos?.length || 1)} video${(j.videos?.length || 1) > 1 ? 's' : ''} on YouTube</div>` : ''}
-    </div>
-    <div data-col="Updated"><span class="small muted">${esc(fmtAgo(j.updatedAt))}</span>
-      <div class="cell-sub">Created ${esc(fmtDateTime(j.createdAt))}</div>
-    </div>
-  </div>`;
+  <button class="vitem" data-job="${esc(j.id)}">
+    ${thumb(j)}
+    <span class="vitem__text">
+      <span class="vitem__title">${esc(j.title || j.topic || 'Topic picked by the video maker')}</span>
+      <span class="vitem__meta">${statusPill(j.status)}</span>
+      <span class="vitem__sub">${esc(makerName(j.engine))} · ${esc(fmtAgo(j.updatedAt))}${j.attempt > 1 ? ` · version ${j.attempt}` : ''}${j.demo ? ' · demo' : ''}</span>
+      ${err ? `<span class="vitem__err">${esc(failureLabel(j.errorCategory) || 'Something went wrong')}</span>` : ''}
+      ${['queued', 'dispatched', 'running', 'generating', 'rendering', 'uploading'].includes(j.status) ? `<span class="vitem__sub" data-pl="${esc(j.id)}">${esc(progressLine(j, null))}</span>` : ''}
+      ${info.tone === 'amber' && ['needs-review', 'awaiting-review'].includes(j.status) ? '<span class="vitem__cta">Tap to check it</span>' : ''}
+    </span>
+    ${icon('chevronR', 'icon--sm')}
+  </button>`;
+}
+
+function stateBanner(j, retriesLeft) {
+  const i = statusInfo(j.status);
+  let next = i.help;
+  if (j.status === 'failed') next = `${failureLabel(j.errorCategory) || 'Something went wrong'}. ${j.errorRetryable === false ? 'This needs a setup fix first — check Settings → Advanced → System status.' : failureNext(j.errorCategory, retriesLeft)}`;
+  if (j.status === 'publish_failed') next = 'The video is fine, but the YouTube upload stopped. Tap Try upload again — it won’t upload twice.';
+  if (j.status === 'approved' && j.publishBlocked) next = `Approved, but not uploaded yet: ${j.publishBlocked}`;
+  const ic = { amber: 'eye', red: 'alert', green: 'check', blue: 'refresh', violet: 'upload', gray: 'info', teal: 'check' }[i.tone] || 'info';
+  return `<div class="state state--${i.tone}">${icon(ic)}<div><strong>${esc(i.label)}</strong><span>${esc(next)}</span></div></div>`;
 }
 
 function detailDrawer(j) {
   const canApprove = ['needs-review', 'awaiting-review'].includes(j.status);
   const canPublish = ['approved', 'scheduled'].includes(j.status);
   const canRetry = ['failed', 'cancelled', 'publish_failed'].includes(j.status);
+  const canStop = ['queued', 'dispatched', 'running', 'generating', 'rendering'].includes(j.status);
   const retriesLeft = Math.max(0, 2 - Number(j.retryCount || 0));
   const blocked = canPublish || canApprove ? j.publishBlocked : null;
+  // A video that is simply waiting for review is not "blocked" — only show real blockers.
+  const realBlock = blocked && !/review|approve the video/i.test(blocked) ? blocked : null;
   const why = {
-    reject: REJECTABLE.includes(j.status) ? '' : j.status === 'uploading' ? 'It is uploading right now.' : `A ${friendlyStatus(j.status)} video cannot be rejected.`,
-    approve: canApprove ? '' : 'Only videos awaiting review can be approved.',
-    publish: canPublish ? (blocked || '') : 'Approve the video first.',
-    retry: !canRetry ? 'Only failed runs or failed uploads can be retried.'
-      : j.status !== 'publish_failed' && !retriesLeft ? 'Both retries are used — use Redo for a new attempt.' : '',
-    regenerate: ['published', 'uploading'].includes(j.status) ? 'Published or uploading videos cannot be redone — add a new topic instead.' : '',
-    edit: j.status === 'published' ? 'Published videos cannot be edited.' : '',
+    reject: REJECTABLE.includes(j.status) ? '' : j.status === 'uploading' ? 'It is uploading right now.' : `A video that is “${statusInfo(j.status).label}” can’t be rejected.`,
+    approve: canApprove ? '' : 'Only videos waiting for your check can be approved.',
+    publish: canPublish ? (realBlock || '') : 'Approve the video first.',
+    retry: !canRetry ? 'Only videos that didn’t finish can be tried again.'
+      : j.status !== 'publish_failed' && !retriesLeft ? 'Both tries are used — tap Redo for a fresh version.' : '',
+    regenerate: ['published', 'uploading'].includes(j.status) ? 'Videos on YouTube or uploading can’t be redone — make a new video instead.' : '',
+    edit: j.status === 'published' ? 'Videos already on YouTube can’t be edited here — edit them in YouTube Studio.' : '',
   };
   const hasRun = !!j.runId && !j.demo;
+  const media = (kind, extra = '') => `/api/jobs/${encodeURIComponent(j.id)}/media?kind=${kind}${extra}`;
+  const qc = j.quality || {};
+  const qcIssues = j.status === 'published' ? [] : Object.entries(qc).filter(([, r]) => r?.state === 'failed');
+  const QC_NAMES = { title: 'Title length', metadata: 'Title & description', artifact: 'Video file', duration: 'Video length', narration: 'Voice', captions: 'Captions', duplicate: 'Repeat-topic check', oauth: 'YouTube sign-in', review: 'Your check', rights: 'Image & music rights' };
+
   const body = `
+    ${stateBanner(j, retriesLeft)}
     ${hasRun ? `<div class="media-review">
-      <video controls preload="metadata" playsinline style="width:100%;max-height:60vh;border-radius:12px;background:#000"
-        src="/api/jobs/${encodeURIComponent(j.id)}/media?kind=video"></video>
+      <video controls preload="metadata" playsinline class="player ${j.format === 'short' ? 'player--short' : ''}" src="${media('video')}"></video>
       <div class="row row--wrap" style="gap:8px;margin-top:8px">
-        <a class="btn btn--ghost btn--sm" href="/api/jobs/${encodeURIComponent(j.id)}/media?kind=video" target="_blank" rel="noopener">${icon('external', 'icon--sm')} Open video</a>
-        ${j.engine === 'gemini' ? `<a class="btn btn--ghost btn--sm" href="/api/jobs/${encodeURIComponent(j.id)}/media?kind=short" target="_blank" rel="noopener">${icon('external', 'icon--sm')} Open Short</a>` : ''}
-        <a class="btn btn--ghost btn--sm" href="/api/jobs/${encodeURIComponent(j.id)}/media?kind=thumb" target="_blank" rel="noopener">${icon('external', 'icon--sm')} Thumbnail</a>
-        <a class="btn btn--ghost btn--sm" href="/api/jobs/${encodeURIComponent(j.id)}/media?kind=video&quality=full&download=1" rel="noopener">${icon('external', 'icon--sm')} Full-quality video</a>
-        ${j.engine === 'gemini' ? `<a class="btn btn--ghost btn--sm" href="/api/jobs/${encodeURIComponent(j.id)}/media?kind=short&quality=full&download=1" rel="noopener">${icon('external', 'icon--sm')} Full-quality Short</a>` : ''}
+        ${j.engine === 'gemini' ? `<a class="btn btn--secondary btn--sm" href="${media('short')}" target="_blank" rel="noopener">${icon('play', 'icon--sm')} Watch the Short</a>` : ''}
+        <a class="btn btn--ghost btn--sm" href="${media('video', '&quality=full&download=1')}" rel="noopener">${icon('external', 'icon--sm')} Full-quality file</a>
       </div>
-      <div class="small muted" style="margin-top:4px">The player streams a small preview; review the full-quality file before approving if detail matters.</div>
-      <div id="visual-credits" class="small muted" style="margin-top:8px">Loading visual sources…</div>
-    </div>` : thumb(j, true)}
-    <div class="row row--wrap" style="gap:7px">
-      <span class="pill pill--outline">${esc(j.format === 'short' ? 'Short · 9:16' : 'Long-form · 16:9')}</span>
-      ${enginePill(j.engine)}
-      ${statusPill(j.status)}
-      ${j.attempt > 1 ? `<span class="pill pill--outline">Attempt ${j.attempt}</span>` : ''}
-      ${j.demo ? '<span class="pill pill--accent">Demo record</span>' : ''}
-    </div>
+      <div class="tiny muted" style="margin-top:4px">This player shows a small preview. Open the full-quality file if detail matters.</div>
+    </div>` : `<div class="player-ph">${thumb(j, true)}<div class="tiny muted">${j.demo ? 'Demo video — no real preview.' : 'The preview appears here when the video is ready.'}</div></div>`}
     ${j.demo ? '' : '<div id="job-progress" aria-live="polite"></div>'}
 
-    <div>
-      <div class="row" style="margin-bottom:6px">
-        <strong class="small">Metadata (this is what will be sent to YouTube)</strong>
-        <button class="btn btn--ghost btn--sm" id="btn-edit-meta" ${disabledAttr(why.edit)}>${icon('doc', 'icon--sm')} Edit</button>
+    <section class="sheet-sec">
+      <div class="sheet-sec__head"><strong>What goes to YouTube</strong>
+        <button class="btn btn--ghost btn--sm" id="btn-edit-meta" ${disabledAttr(why.edit)}>${icon('doc', 'icon--sm')} Edit</button></div>
+      <div class="meta-title">${esc(j.title || 'No title yet')}</div>
+      <p class="meta-desc">${esc(j.description || 'No description yet.')}</p>
+      ${(j.tags || []).length ? `<div class="row row--wrap" style="gap:6px">${j.tags.map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+      <div class="tiny muted" style="margin-top:8px">${esc(makerName(j.engine))} · ${j.status === 'published' ? 'on YouTube' : `goes up as ${esc(visWord())}`}</div>
+    </section>
+
+    ${(j.videos || []).length || j.youtubeUrl ? `<section class="sheet-sec"><strong>On YouTube</strong><div class="yt-links" style="margin-top:8px">${videoLinks(j)}</div></section>` : ''}
+    ${j.reviewNote ? `<div class="callout">${icon('doc')}<div><strong>Your note:</strong> ${esc(j.reviewNote)}</div></div>` : ''}
+    ${realBlock ? `<div class="callout callout--warn">${icon('lock')}<div><strong>Can’t publish yet.</strong> ${esc(realBlock)}</div></div>` : ''}
+    ${j.duplicateOf ? `<div class="callout callout--warn">${icon('copy')}<div><strong>This looks like a topic you already made.</strong> ${j.duplicateOf.url ? `<a href="${esc(j.duplicateOf.url)}" target="_blank" rel="noopener">See the earlier video</a>. ` : ''}Publishing will be blocked to avoid a repeat.</div></div>` : ''}
+    ${qcIssues.length ? `<div class="callout callout--warn">${icon('alert')}<div><strong>Check this before approving:</strong> ${qcIssues.map(([k, r]) => `${esc(QC_NAMES[k] || k)} (${esc(r.label || r.state)})`).join(', ')}</div></div>` : ''}
+
+    <details class="mini-details tech">
+      <summary>${icon('info', 'icon--sm')} Details <span class="muted small">checks, files, steps, logs, IDs</span></summary>
+      <div class="stack" style="margin-top:10px">
+        <dl class="kv">
+          <dt>Topic</dt><dd>${esc(j.topic || '—')}</dd>
+          <dt>Category</dt><dd>${esc(j.niche || 'general')}</dd>
+          <dt>Video maker</dt><dd>${esc(makerName(j.engine))}</dd>
+          ${j.attempt > 1 ? `<dt>Version</dt><dd>${esc(String(j.attempt))}</dd>` : ''}
+          <dt>Created</dt><dd>${esc(fmtDateTime(j.createdAt))}</dd>
+          <dt>Planned for</dt><dd>${j.scheduledFor ? esc(fmtDateTime(j.scheduledFor)) : '—'}</dd>
+          <dt>Published</dt><dd>${j.publishedAt ? esc(fmtDateTime(j.publishedAt)) : '—'}</dd>
+          ${j.parentJobId ? `<dt>Redo of</dt><dd class="mono"><a href="#/videos?job=${encodeURIComponent(j.parentJobId)}">${esc(j.parentJobId)}</a></dd>` : ''}
+          ${(j.videos || []).map((v) => `<dt>${v.kind === 'short' ? 'YouTube Short' : v.kind === 'long' ? 'Long video' : 'YouTube'}</dt><dd><a href="${esc(v.youtube_url)}" target="_blank" rel="noopener">${esc(v.youtube_url)}</a></dd>`).join('')}
+          ${!(j.videos || []).length && j.youtubeUrl ? `<dt>YouTube</dt><dd><a href="${esc(j.youtubeUrl)}" target="_blank" rel="noopener">${esc(j.youtubeUrl)}</a></dd>` : ''}
+          <dt>Reference</dt><dd class="mono">${esc(j.id)}</dd>
+          ${j.stage ? `<dt>Last step</dt><dd>${esc(friendlyStage(j.stage))}</dd>` : ''}
+        </dl>
+        ${j.error && ['failed', 'publish_failed', 'cancelled'].includes(j.status) ? `<div class="callout callout--danger">${icon('alert')}<div><strong>${esc(failureLabel(j.errorCategory) || 'Error')}.</strong> ${esc(j.error)}
+          ${j.errorLog ? `<details style="margin-top:6px"><summary class="small">Last lines of the log</summary><pre class="log-tail">${esc(j.errorLog)}</pre></details>` : ''}</div></div>` : ''}
+        ${j.duplicateOf?.key ? `<div class="tiny muted">Repeat-topic key: <span class="mono">${esc(j.duplicateOf.key)}</span></div>` : ''}
+        ${hasRun ? `<div class="row row--wrap" style="gap:8px">
+          <a class="btn btn--ghost btn--sm" href="${media('video')}" target="_blank" rel="noopener">${icon('external', 'icon--sm')} Open preview</a>
+          <a class="btn btn--ghost btn--sm" href="${media('thumb')}" target="_blank" rel="noopener">${icon('image', 'icon--sm')} Thumbnail</a>
+          ${j.engine === 'gemini' ? `<a class="btn btn--ghost btn--sm" href="${media('short', '&quality=full&download=1')}" rel="noopener">${icon('external', 'icon--sm')} Full-quality Short</a>` : ''}
+        </div>
+        <div id="visual-credits" class="small muted">Loading picture sources…</div>` : ''}
+        <div>
+          <div class="small" style="font-weight:700;margin-bottom:6px">All checks</div>
+          <div class="qc">
+            ${qcRow('Title length (100 characters max)', qc.title)}
+            ${qcRow('Title & description present', qc.metadata)}
+            ${qcRow('Video file made', qc.artifact)}
+            ${qcRow('Video has a length', qc.duration)}
+            ${qcRow('Voice', qc.narration)}
+            ${qcRow('Captions', qc.captions)}
+            ${qcRow('Repeat-topic check', qc.duplicate)}
+            ${qcRow('YouTube sign-in', qc.oauth)}
+            ${qcRow('Your check', qc.review)}
+            ${qcRow('Image & music rights', qc.rights)}
+          </div>
+        </div>
+        <div>
+          <div class="row" style="margin-bottom:6px"><span class="small" style="font-weight:700">Log</span>
+            ${j.runId ? `<a class="tiny" href="#/runs?run=${encodeURIComponent(j.runId)}">Open in technical history</a>` : ''}</div>
+          ${renderLogs(j.logs || [])}
+        </div>
       </div>
-      <h3 style="font-size:16px;font-weight:750;letter-spacing:-.2px">${esc(j.title)}</h3>
-      <p class="small muted" style="margin-top:6px;line-height:1.65">${esc(j.description || 'No description generated yet.')}</p>
-    </div>
-    <div class="row row--wrap" style="gap:6px">${(j.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join('')}</div>
-    <dl class="kv">
-      <dt>Topic</dt><dd>${esc(j.topic || '—')}</dd>
-      <dt>Niche</dt><dd>${esc(j.niche || 'general')}</dd>
-      <dt>Created</dt><dd>${esc(fmtDateTime(j.createdAt))}</dd>
-      <dt>Scheduled</dt><dd>${j.scheduledFor ? esc(fmtDateTime(j.scheduledFor)) : '—'}</dd>
-      <dt>Published</dt><dd>${j.publishedAt ? esc(fmtDateTime(j.publishedAt)) : '—'}</dd>
-      ${j.parentJobId ? `<dt>Regenerated from</dt><dd class="mono"><a href="#/queue?job=${encodeURIComponent(j.parentJobId)}">${esc(j.parentJobId)}</a></dd>` : ''}
-      ${(j.videos || []).map((v) => `<dt>${v.kind === 'short' ? 'YouTube Short' : v.kind === 'long' ? 'Long video' : 'YouTube'}</dt><dd><a href="${esc(v.youtube_url)}" target="_blank" rel="noopener">${esc(v.youtube_url)}</a></dd>`).join('')}
-      ${!(j.videos || []).length && j.youtubeUrl ? `<dt>YouTube</dt><dd><a href="${esc(j.youtubeUrl)}" target="_blank" rel="noopener">${esc(j.youtubeUrl)}</a></dd>` : ''}
-      ${j.reviewNote ? `<dt>Review note</dt><dd>${esc(j.reviewNote)}</dd>` : ''}
-      <dt>Job ID</dt><dd class="mono">${esc(j.id)}</dd>
-    </dl>
-    ${j.error && ['failed', 'publish_failed', 'cancelled'].includes(j.status) ? `<div class="callout callout--danger">${icon('alert')}<div><strong>${esc(failureLabel(j.errorCategory) || 'Failed')}.</strong> ${esc(j.error)}
-      ${j.errorRetryable === false ? '<br>This needs a fix before retrying.' : ''}
-      ${j.errorLog ? `<details style="margin-top:6px"><summary class="small">Last lines of the engine log</summary><pre class="log-tail">${esc(j.errorLog)}</pre></details>` : ''}</div></div>` : ''}
-    ${blocked ? `<div class="callout callout--warn">${icon('lock')}<div><strong>Publishing blocked.</strong> ${esc(blocked)}</div></div>` : ''}
-    ${j.duplicateOf ? `<div class="callout callout--warn">${icon('copy')}<div><strong>Possible duplicate.</strong> Matches existing topic${j.duplicateOf.url ? ` — <a href="${esc(j.duplicateOf.url)}" target="_blank" rel="noopener">existing video</a>` : ''}. Normalised topic key: <span class="mono">${esc(j.duplicateOf.key || '')}</span></div></div>` : ''}
-    <div>
-      <div class="row" style="margin-bottom:8px"><strong class="small">Quality checks</strong>
-        <span class="tiny muted">— only verifiable checks pass; the rest are labelled</span></div>
-      <div class="qc">
-        ${qcRow('Title length (≤100)', j.quality?.title)}
-        ${qcRow('Metadata present', j.quality?.metadata)}
-        ${qcRow('Output artifact', j.quality?.artifact)}
-        ${qcRow('Duration > 0', j.quality?.duration)}
-        ${qcRow('Narration', j.quality?.narration)}
-        ${qcRow('Captions', j.quality?.captions)}
-        ${qcRow('Duplicate check', j.quality?.duplicate)}
-        ${qcRow('OAuth credentials', j.quality?.oauth)}
-        ${qcRow('Review decision', j.quality?.review)}
-        ${qcRow('Copyright / rights', j.quality?.rights)}
-      </div>
-    </div>
-    <div>
-      <div class="row" style="margin-bottom:8px"><strong class="small">Generation logs</strong>
-        ${j.runId ? `<a class="tiny" href="#/runs?run=${encodeURIComponent(j.runId)}">Open run history</a>` : ''}</div>
-      ${renderLogs(j.logs || [])}
-    </div>`;
+    </details>`;
 
   const btn = (action, label, ic, cls = 'btn--secondary') =>
-    `<button class="${cls} btn--sm" data-jact="${action}" ${disabledAttr(why[action])}>${icon(ic, 'icon--sm')} ${label}</button>`;
+    `<button class="btn ${cls}" data-jact="${action}" ${disabledAttr(why[action])}>${icon(ic, 'icon--sm')} ${label}</button>`;
 
-  // Only the actions that make sense now; the time-of-day schedule control is
-  // hidden (nothing acts on it yet). Approve = approve + upload in one tap.
-  const foot = j.status === 'published' ? `<div class="yt-links">${videoLinks(j)}</div>` : `
-    ${canApprove ? btn('approve', 'Approve & publish', 'check', 'btn--primary') : ''}
-    ${canPublish ? btn('publish', 'Publish', 'upload', 'btn--primary') : ''}
-    ${canRetry ? btn('retry', j.status === 'publish_failed' ? 'Retry upload' : `Retry (${retriesLeft} left)`, 'run') : ''}
-    ${REJECTABLE.includes(j.status) ? btn('reject', 'Reject', 'x', 'btn--danger') : ''}
-    ${why.regenerate ? '' : btn('regenerate', 'Redo', 'refresh')}
-    ${blocked && (canPublish || (canApprove && !/review|Approve the video/i.test(blocked))) ? `<div class="small" style="flex-basis:100%;color:var(--amber, #b45309)">${icon('lock', 'icon--sm')} ${esc(blocked)}</div>` : ''}`;
+  let primary = '';
+  if (canApprove) primary = btn('approve', 'Approve & publish', 'check', 'btn--primary btn--xl');
+  else if (canPublish) primary = btn('publish', 'Publish now', 'upload', 'btn--primary btn--xl');
+  else if (canRetry) primary = btn('retry', j.status === 'publish_failed' ? 'Try upload again' : `Try again (${retriesLeft} left)`, 'refresh', 'btn--primary btn--xl');
+  else if (canStop) primary = `<button class="btn btn--secondary btn--xl" data-jact="cancel">${icon('x', 'icon--sm')} Stop making</button>`;
+  const secondary = [
+    why.regenerate ? '' : btn('regenerate', 'Redo', 'refresh'),
+    REJECTABLE.includes(j.status) ? btn('reject', 'Reject', 'x', 'btn--danger') : '',
+  ].filter(Boolean).join('');
+  const foot = j.status === 'published'
+    ? `<div class="foot-stack">${videoLinks(j, true) || '<span class="small muted">On YouTube.</span>'}</div>`
+    : `<div class="foot-stack">${primary}${secondary ? `<div class="foot-row">${secondary}</div>` : ''}</div>`;
 
-  openDrawer({ title: 'Video Details', body, foot });
-  // Live step-by-step progress while the job runs (stops when done/closed).
+  openDrawer({ title: canApprove ? 'Check this video' : 'Video', body, foot });
+  document.getElementById('drawer').dataset.kind = 'review';
   mountProgress(document.getElementById('job-progress'), `/api/jobs/${encodeURIComponent(j.id)}/progress`, {
+    showWhenDone: false,
     onDone: (p) => {
-      toast(p.jobStatus === 'failed' ? 'Run failed' : 'Run finished',
-        p.jobStatus === 'failed' ? (p.failingStep ? `Failed at step: ${p.failingStep}` : (p.error || '')) : `Status: ${p.jobStatus}`,
+      toast(p.jobStatus === 'failed' ? 'It didn’t finish' : 'Ready!',
+        p.jobStatus === 'failed' ? 'Open it to see what to do next.' : `${statusInfo(p.jobStatus).label}.`,
         p.jobStatus === 'failed' ? 'bad' : 'ok');
       refresh().catch(() => {});
     },
@@ -221,65 +256,89 @@ function detailDrawer(j) {
           const items = Array.isArray(m.data) ? m.data : (m.data?.segments || m.data?.assets || m.data?.items || []);
           for (const it of items) {
             const a = it.asset || it;
-            rows.push(`<li>${esc(String(it.segment ?? ''))} · ${esc(a.provider || 'unknown')} · ${esc(a.license || '—')}${it.review_required ? ' · <strong>review</strong>' : ''}${a.source_url && !/api\.cloudflare/.test(a.source_url) ? ` · <a href="${esc(a.source_url)}" target="_blank" rel="noopener">source</a>` : ''}</li>`);
+            rows.push(`<li>${esc(String(it.segment ?? ''))} · ${esc(a.provider || 'unknown')} · ${esc(a.license || '—')}${it.review_required ? ' · <strong>check</strong>' : ''}${a.source_url && !/api\.cloudflare/.test(a.source_url) ? ` · <a href="${esc(a.source_url)}" target="_blank" rel="noopener">source</a>` : ''}</li>`);
           }
         }
-        credits.innerHTML = rows.length ? `<strong>Visual sources</strong><ul style="margin:4px 0 0 16px">${rows.slice(0, 40).join('')}</ul>` : 'No visual manifest in this run.';
+        credits.innerHTML = rows.length ? `<strong>Where the pictures came from</strong><ul style="margin:4px 0 0 16px">${rows.slice(0, 40).join('')}</ul>` : 'No picture-source list in this video.';
       })
-      .catch(() => { credits.textContent = 'Visual sources unavailable.'; });
+      .catch(() => { credits.textContent = 'Picture sources unavailable.'; });
   }
 
-  document.getElementById('btn-edit-meta')?.addEventListener('click', () => {
+  document.getElementById('btn-edit-meta')?.addEventListener('click', (ev) => {
+    if (ev.currentTarget.getAttribute('aria-disabled') === 'true') return;
     openModal({
-      title: 'Edit metadata',
+      title: 'Edit what goes to YouTube',
       body: `
-        <div class="field"><label class="field__label" for="m-title">Title (≤100 chars)</label>
-          <input class="input" id="m-title" maxlength="100" value="${esc(j.title)}"></div>
+        <div class="field"><label class="field__label" for="m-title">Title</label>
+          <input class="input input--lg" id="m-title" maxlength="100" value="${esc(j.title)}">
+          <div class="field__hint"><span id="m-count">${(j.title || '').length}</span>/100 characters. No personal names.</div></div>
         <div class="field"><label class="field__label" for="m-desc">Description</label>
-          <textarea class="textarea" id="m-desc">${esc(j.description || '')}</textarea></div>
-        <div class="field"><label class="field__label" for="m-tags">Tags (comma separated)</label>
-          <input class="input" id="m-tags" value="${esc((j.tags || []).join(', '))}"></div>
-        <div class="callout">${icon('info')}<div>These edits are persisted and are the metadata sent to YouTube when this job publishes.</div></div>`,
+          <textarea class="textarea" id="m-desc" rows="5">${esc(j.description || '')}</textarea>
+          <div class="field__hint">Shown under the video on YouTube.</div></div>
+        <div class="field"><label class="field__label" for="m-tags">Tags</label>
+          <input class="input input--lg" id="m-tags" value="${esc((j.tags || []).join(', '))}">
+          <div class="field__hint">Separate with commas, e.g. space, science, explainer.</div></div>`,
       foot: `<button class="btn btn--secondary" id="m-cancel">Cancel</button>
-             <button class="btn btn--primary" id="m-save">Save metadata</button>`,
+             <button class="btn btn--primary" id="m-save">Save</button>`,
     });
+    document.getElementById('m-title').oninput = (e) => { document.getElementById('m-count').textContent = e.target.value.length; };
     document.getElementById('m-cancel').onclick = closeModal;
     document.getElementById('m-save').onclick = async (e) => {
       e.target.disabled = true;
       try {
-        const res = await api.patch(`/api/jobs/${j.id}`, {
+        await api.patch(`/api/jobs/${j.id}`, {
           title: document.getElementById('m-title').value,
           description: document.getElementById('m-desc').value,
           tags: document.getElementById('m-tags').value.split(',').map((t) => t.trim()).filter(Boolean),
         });
-        closeModal(); closeDrawer();
-        toast('Metadata saved', res.message, 'ok');
-        await refresh();
+        closeModal();
+        toast('Saved', 'This is what will be sent to YouTube.', 'ok');
+        const full = await api.job(j.id);
+        detailDrawer(full.job);
+        refresh().catch(() => {});
       } catch (err) {
         e.target.disabled = false;
-        toast('Save failed', err.message, 'bad');
+        errorToast(err, 'Couldn’t save');
       }
     };
   });
 
-  document.getElementById('drawer-foot').addEventListener('click', async (e) => {
+  document.getElementById('drawer-foot').onclick = async (e) => {
     const b = e.target.closest('[data-jact]');
-    if (!b || b.disabled) return;
+    if (!b || b.disabled || b.getAttribute('aria-disabled') === 'true') return;
     const action = b.dataset.jact;
     let payload = {};
     if (action === 'reject') {
-      const reason = await askText('Reject this video', 'What is wrong with it? This note is kept and used as feedback when you tap Redo.', 'e.g. Too many crowd clips; the intro is too slow', 'Reject');
+      const reason = await reasonSheet({ title: 'Reject this video?', intro: 'It will not be published. Your reason is saved and used as feedback if you tap Redo later.', okLabel: 'Reject video', danger: true });
       if (reason === null) return;
       payload = { reason };
     }
     if (action === 'approve') {
-      if (!await confirmModal('Approve and publish?', 'This approves the video and starts the YouTube upload now, with the visibility set in Settings. The daily cap and duplicate checks still apply.', 'Approve & publish')) return;
+      let capText = '';
+      try {
+        const l = await api.jobs('?status=published&sort=newest');
+        if (l.cap) capText = `This will be upload ${Math.min(l.cap.used + 1, l.cap.limit)} of ${l.cap.limit} today.`;
+      } catch { /* optional */ }
+      if (!await confirmModal('Publish to YouTube?', `
+          <div class="confirm-card"><strong>${esc(j.title || 'This video')}</strong>
+            <span>${esc(makerName(j.engine))}${j.engine === 'gemini' ? ' — the video and its Short both go up' : ''}</span></div>
+          <ul class="confirm-list">
+            <li>${icon('eye', 'icon--sm')}<span>Goes up as <strong>${esc(visWord())}</strong>${UI_PREFS.visibility === 'unlisted' ? ' — only people with the link can see it' : ''}.</span></li>
+            ${capText ? `<li>${icon('upload', 'icon--sm')}<span>${esc(capText)}</span></li>` : ''}
+            <li>${icon('shield', 'icon--sm')}<span>The daily limit and repeat-topic check still apply.</span></li>
+          </ul>`, 'Approve & publish', false, 'Not yet')) return;
     }
     if (action === 'publish' || (action === 'retry' && j.status === 'publish_failed')) {
-      if (!await confirmModal(action === 'publish' ? 'Publish now?' : 'Retry the upload?', 'The console first checks that nothing from this job already reached YouTube, so it cannot upload twice.', action === 'publish' ? 'Publish' : 'Retry upload')) return;
+      if (!await confirmModal(action === 'publish' ? 'Publish now?' : 'Try the upload again?', `<p>It goes up as <strong>${esc(visWord())}</strong>. The console first checks that nothing from this video is already on YouTube, so it can’t upload twice.</p>`, action === 'publish' ? 'Publish now' : 'Try upload again', false, 'Not yet')) return;
+    }
+    if (action === 'retry' && j.status !== 'publish_failed') {
+      if (!await confirmModal('Try again?', `<p>Makes this video again with the latest version of the video maker (about 15 minutes). ${retriesLeft} ${retriesLeft === 1 ? 'try' : 'tries'} left.</p>`, 'Try again', false, 'Not now')) return;
+    }
+    if (action === 'cancel') {
+      if (!await confirmModal('Stop making this video?', '<p>The video maker stops and this video is thrown away. Nothing is published.</p>', 'Stop making', true, 'Keep making')) return;
     }
     if (action === 'regenerate') {
-      const fb = await askText('Redo this video', 'Optional: what should change? Saved with the new attempt (and sent to the engine once it accepts feedback).', j.reviewNote || '', 'Start redo', true);
+      const fb = await reasonSheet({ title: 'Make a new version?', intro: 'A fresh version is made (about 15 minutes) and replaces this one. Tell the maker what to change — optional.', okLabel: 'Start new version', optional: true, prefill: j.reviewNote || '' });
       if (fb === null) return;
       payload = fb ? { feedback: fb } : {};
     }
@@ -289,173 +348,141 @@ function detailDrawer(j) {
         ? await api.jobRetry(j.id)
         : await api.jobAction(j.id, action, payload);
       closeDrawer();
-      toast(res.published === false ? 'Approved — not uploaded yet' : 'Done', res.message || 'Action completed.', res.published === false ? 'warn' : 'ok');
+      const done = {
+        approve: res.published === false ? ['Approved — not uploaded yet', res.message || 'Open it later and tap Publish now.', 'warn'] : ['Approved!', `It’s going up on YouTube as ${visWord()}.`, 'ok'],
+        publish: ['Publishing…', `It’s going up on YouTube as ${visWord()}.`, 'ok'],
+        reject: ['Rejected', 'It won’t be published. Your reason was saved.', 'ok'],
+        regenerate: ['New version started', 'Follow it on Home — about 15 minutes.', 'ok'],
+        retry: ['Trying again', 'Follow it on Home.', 'ok'],
+        cancel: ['Stopped', 'Nothing was published.', 'ok'],
+      }[action] || ['Done', res.message || '', 'ok'];
+      toast(done[0], done[1], done[2], 6000);
       await refresh();
     } catch (err) {
       b.disabled = false;
-      toast('Action failed', err.message, 'bad');
+      errorToast(err, 'That didn’t work');
     }
-  });
+  };
+}
+
+async function openJob(id) {
+  try {
+    const full = await api.job(id);
+    view.selected = id;
+    detailDrawer(full.job);
+  } catch (err) { errorToast(err, 'Couldn’t open the video'); }
 }
 
 async function refresh() {
   const root = document.getElementById('page-root');
+  const hashParams = new URLSearchParams(location.hash.split('?')[1] || '');
+  if (hashParams.get('tab') && SEGMENTS[hashParams.get('tab')] !== undefined) { view.seg = hashParams.get('tab'); view.tab = ''; }
+  if (hashParams.get('status')) view.tab = hashParams.get('status');
+  const requestedJob = hashParams.get('job');
+  if (hashParams.get('tab') || hashParams.get('status') || requestedJob) history.replaceState(null, '', '#/videos');
+
+  // First visit: open "To check" when something is waiting, otherwise "All".
+  if (view.seg === null) {
+    const probe = await api.jobs('?sort=newest');
+    view.seg = (probe.counts?.['needs-review'] || 0) > 0 ? 'check' : 'all';
+  }
   const data = await api.jobs(filterQuery());
   const counts = data.counts || {};
   const jobs = data.jobs || [];
+  const nCheck = chipCount(counts, 'needs-review');
+  const nMaking = chipCount(counts, SEGMENTS.making);
+  const filtersOn = !!(view.tab || view.q || view.engine || view.type || view.niche || view.date || view.sort !== 'newest');
 
-  const hashParams = new URLSearchParams(location.hash.split('?')[1] || '');
-  const requestedJob = hashParams.get('job');
-  if (requestedJob && jobs.some((j) => j.id === requestedJob)) view.selected = requestedJob;
+  const empty = {
+    check: ['eye', 'Nothing to check right now', 'When a video is ready, it shows up here for you to watch and approve.'],
+    making: ['video', 'Nothing is being made', 'Start a video and you can follow it here and on Home.'],
+    all: ['inbox', filtersOn ? 'No videos match these filters' : 'No videos yet', filtersOn ? 'Clear the filters to see everything.' : 'Make your first video — it takes about 15 minutes.'],
+  }[view.seg] || ['inbox', 'No videos', ''];
 
   root.innerHTML = `
-    <div class="page-head">
-      <div>
-        <h1>Content Queue</h1>
-        <div class="sub">Review, approve, and publish safely.</div>
-      </div>
-      <div class="page-head__actions">
-        <span class="badge-soft">${icon('shield', 'icon--sm')} Human approval enabled</span>
-        ${data.cap ? `<span class="badge-soft badge-soft--neutral">${icon('upload', 'icon--sm')} Today: ${esc(String(data.cap.used))}/${esc(String(data.cap.limit))} uploads · resets ${esc(data.cap.resets || '05:30 IST')}</span>` : ''}
-        <span class="badge-soft badge-soft--neutral">${icon('copy', 'icon--sm')} Duplicate topics blocked</span>
-        <button class="btn btn--primary" id="btn-add-topic">${icon('plus', 'icon--sm')} Add new topic</button>
-      </div>
+    <div class="page-head page-head--simple">
+      <div><h1>Videos</h1>
+        <div class="sub">Check new videos, follow the ones being made, and find old ones.</div></div>
     </div>
 
-    <div class="row row--wrap filter-bar" style="margin-bottom:10px">
-      ${STATUS_TABS.map(([key, label]) => `
-        <button class="chip ${view.tab === key ? 'is-active' : ''}" data-tab="${key}">
-          ${esc(label)} <span class="chip__count">${chipCount(counts, key)}</span>
-        </button>`).join('')}
+    <div class="segbar" role="tablist">
+      <button role="tab" class="${view.seg === 'check' ? 'is-active' : ''}" data-seg="check">To check${nCheck ? ` <span class="segbar__n segbar__n--amber">${nCheck}</span>` : ''}</button>
+      <button role="tab" class="${view.seg === 'making' ? 'is-active' : ''}" data-seg="making">Being made${nMaking ? ` <span class="segbar__n">${nMaking}</span>` : ''}</button>
+      <button role="tab" class="${view.seg === 'all' ? 'is-active' : ''}" data-seg="all">All <span class="segbar__n">${counts.all ?? 0}</span></button>
     </div>
-    <div class="row row--wrap filter-bar" style="margin-bottom:14px">
-      <div class="search">
-        ${icon('search')}
-        <input class="input" id="q-search" placeholder="Search titles, tags, or keywords…" value="${esc(view.q)}" />
-      </div>
-      <select class="select" id="q-engine" style="width:auto" title="Filter by engine">
-        <option value="">All Engines</option>
-        <option value="gemini" ${view.engine === 'gemini' ? 'selected' : ''}>Gemini Automation</option>
-        <option value="verticals" ${view.engine === 'verticals' ? 'selected' : ''}>Verticals v3</option>
-      </select>
-      <select class="select" id="q-type" style="width:auto" title="Filter by format">
-        <option value="">All Types</option>
-        <option value="long-form" ${view.type === 'long-form' ? 'selected' : ''}>Long-form 16:9</option>
-        <option value="short" ${view.type === 'short' ? 'selected' : ''}>Short 9:16</option>
-      </select>
-      <select class="select" id="q-niche" style="width:auto" title="Filter by niche">
-        <option value="">All Niches</option>
-        ${NICHES.map((n) => `<option value="${n}" ${view.niche === n ? 'selected' : ''}>${n}</option>`).join('')}
-      </select>
-      <input class="input" type="date" id="q-date" style="width:auto" title="Created on or after" value="${esc(view.date)}">
-      <select class="select" id="q-sort" style="width:auto">
-        <option value="newest" ${view.sort === 'newest' ? 'selected' : ''}>Newest First</option>
-        <option value="oldest" ${view.sort === 'oldest' ? 'selected' : ''}>Oldest First</option>
-        <option value="status" ${view.sort === 'status' ? 'selected' : ''}>By status</option>
-      </select>
-    </div>
+    ${data.cap ? `<div class="tiny muted" style="margin:-4px 2px 12px">Uploads today: ${esc(String(data.cap.used))} of ${esc(String(data.cap.limit))} used · resets 5:30 AM</div>` : ''}
 
-    <div class="card">
-      ${jobs.length ? `
-      <div class="table" role="table">
-        <div class="table__head" role="row" style="grid-template-columns:28px 76px minmax(0,2.2fr) 1fr .9fr 1.2fr 1.05fr 1.1fr">
-          <div><span class="check"></span></div><div>Video</div><div>Title</div>
-          <div>Engine / Type</div><div>Progress</div><div>Status</div><div>Updated</div><div></div>
+    <details class="filters" ${filtersOn ? 'open' : ''}>
+      <summary>${icon('filter', 'icon--sm')} Search &amp; filters${filtersOn ? ' <span class="pill pill--accent">on</span>' : ''}</summary>
+      <div class="filters__body">
+        <div class="search">${icon('search')}<input class="input" id="q-search" placeholder="Search titles or tags…" value="${esc(view.q)}" /></div>
+        <div class="field__label" style="margin-top:4px">Status</div>
+        <div class="row row--wrap filter-chips">
+          ${STATUS_TABS.map(([key, label]) => `
+            <button class="chip ${view.tab === key && (key || filtersOn) ? 'is-active' : ''}" data-tab="${key}">${esc(label)} <span class="chip__count">${chipCount(counts, key)}</span></button>`).join('')}
         </div>
-        ${jobs.map((j) => jobRow(j)).join('')}
+        <div class="filters__grid">
+          <label class="field"><span class="field__label">Kind</span><select class="select" id="q-engine">
+            <option value="">Any kind</option>
+            <option value="gemini" ${view.engine === 'gemini' ? 'selected' : ''}>Long video + Short</option>
+            <option value="verticals" ${view.engine === 'verticals' ? 'selected' : ''}>Short only</option></select></label>
+          <label class="field"><span class="field__label">Shape</span><select class="select" id="q-type">
+            <option value="">Any shape</option>
+            <option value="long-form" ${view.type === 'long-form' ? 'selected' : ''}>Long video 16:9</option>
+            <option value="short" ${view.type === 'short' ? 'selected' : ''}>Short 9:16</option></select></label>
+          <label class="field"><span class="field__label">Category</span><select class="select" id="q-niche">
+            <option value="">Any category</option>
+            ${NICHES.map((n) => `<option value="${n}" ${view.niche === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+          <label class="field"><span class="field__label">Made on or after</span><input class="input" type="date" id="q-date" value="${esc(view.date)}"></label>
+          <label class="field"><span class="field__label">Order</span><select class="select" id="q-sort">
+            <option value="newest" ${view.sort === 'newest' ? 'selected' : ''}>Newest first</option>
+            <option value="oldest" ${view.sort === 'oldest' ? 'selected' : ''}>Oldest first</option>
+            <option value="status" ${view.sort === 'status' ? 'selected' : ''}>By status</option></select></label>
+        </div>
+        ${filtersOn ? '<button class="btn btn--ghost btn--sm" id="q-clear">Clear filters</button>' : ''}
       </div>
-      <div class="card__foot" style="justify-content:space-between">
-        <span class="tiny muted">Showing ${jobs.length} of ${counts.all ?? jobs.length} jobs</span>
-        <span class="tiny muted">Click a row to open the review panel</span>
-      </div>`
-      : emptyState('inbox', 'No videos match these filters', 'Adjust filters or add a new topic to start production.', `<button class="btn btn--primary btn--sm" id="empty-add">Add new topic</button>`)}
-    </div>
+    </details>
 
-    ${data.policyNote ? `<div class="callout" style="margin-top:16px">${icon('lock')}<div><strong>Human approval enabled.</strong> ${esc(data.policyNote)}</div></div>` : ''}
+    ${jobs.length ? `<div class="vlist-big">${jobs.map(card).join('')}</div>
+      <div class="tiny muted" style="margin:10px 2px">Showing ${jobs.length} of ${counts.all ?? jobs.length} videos</div>`
+      : `<div class="card">${emptyState(empty[0], empty[1], empty[2], `<a class="btn btn--primary btn--lg" href="#/make">${icon('plus', 'icon--sm')} Make a new video</a>`)}</div>`}
 
-    <div class="footer-note">
-      <span class="brand-lockup"><span class="mark">${icon('play', 'icon--sm')}</span><strong>DYPOL LABS</strong></span>
-      <span>DYPOL Creator Console</span><span>·</span><span>Content Queue</span>
-    </div>`;
+    <div class="callout" style="margin-top:14px">${icon('shield')}<div>You check every video before it goes up. Approve sends it to YouTube as ${esc(visWord())}; the daily limit and repeat-topic check are always applied.</div></div>`;
 
-  root.querySelectorAll('[data-tab]').forEach((b) => {
-    b.onclick = () => { view.tab = b.dataset.tab; refresh(); };
+  root.querySelectorAll('[data-seg]').forEach((b) => {
+    b.onclick = () => { view.seg = b.dataset.seg; view.tab = ''; refresh(); };
   });
-
-  // Preserve search focus/caret across re-renders (UX fix).
+  root.querySelectorAll('[data-tab]').forEach((b) => {
+    b.onclick = () => { view.tab = b.dataset.tab; if (!b.dataset.tab) view.seg = 'all'; refresh(); };
+  });
   const searchEl = root.querySelector('#q-search');
-  if (searchEl.dataset.refocus === '1') {
+  if (searchEl && view._refocus) {
     searchEl.focus();
     const v = searchEl.value; searchEl.value = ''; searchEl.value = v;
+    view._refocus = false;
   }
   let t = null;
-  searchEl.addEventListener('input', () => {
-    searchEl.dataset.refocus = '1';
+  searchEl?.addEventListener('input', () => {
     clearTimeout(t);
-    t = setTimeout(() => { view.q = searchEl.value.trim(); refresh(); }, 320);
+    t = setTimeout(() => { view.q = searchEl.value.trim(); view._refocus = true; refresh(); }, 320);
   });
   root.querySelector('#q-engine').onchange = (e) => { view.engine = e.target.value; refresh(); };
   root.querySelector('#q-type').onchange = (e) => { view.type = e.target.value; refresh(); };
   root.querySelector('#q-niche').onchange = (e) => { view.niche = e.target.value; refresh(); };
   root.querySelector('#q-date').onchange = (e) => { view.date = e.target.value; refresh(); };
   root.querySelector('#q-sort').onchange = (e) => { view.sort = e.target.value; refresh(); };
+  const clear = root.querySelector('#q-clear');
+  if (clear) clear.onclick = () => { Object.assign(view, { tab: '', q: '', engine: '', type: '', niche: '', date: '', sort: 'newest' }); refresh(); };
 
-  root.querySelectorAll('[data-job]').forEach((row) => {
-    row.onclick = async () => {
-      view.selected = row.dataset.job;
-      try {
-        const full = await api.job(row.dataset.job);
-        detailDrawer(full.job);
-        refresh();
-      } catch (err) { toast('Could not load video', err.message, 'bad'); }
-    };
-  });
-
-  const addTopic = async () => {
-    openModal({
-      title: 'Add new topic',
-      body: `
-        <div class="field"><label class="field__label" for="t-topic">Topic or keyword</label>
-          <input class="input" id="t-topic" placeholder="e.g. The science of black holes" /></div>
-        <div class="field"><label class="field__label" for="t-engine">Engine</label>
-          <select class="select" id="t-engine">
-            <option value="gemini">Gemini Automation (long-form + short)</option>
-            <option value="verticals">Verticals v3 (vertical short)</option>
-            <option value="auto">Orchestrator decides (per execution mode)</option>
-          </select></div>
-        <div class="field"><label class="field__label" for="t-niche">Niche</label>
-          <select class="select" id="t-niche">${NICHES.map((n) => `<option>${n}</option>`).join('')}</select></div>
-        <div class="callout">${icon('shield')}<div>The duplicate check runs before this topic is dispatched. A normalised match with an existing active or published video is blocked.</div></div>`,
-      foot: `<button class="btn btn--secondary" id="m-cancel">Cancel</button>
-             <button class="btn btn--primary" id="m-add">${icon('plus', 'icon--sm')} Add to queue</button>`,
+  root.querySelectorAll('[data-job]').forEach((row) => { row.onclick = () => openJob(row.dataset.job); });
+  for (const j of jobs.filter((x) => ['dispatched', 'running', 'generating', 'rendering'].includes(x.status)).slice(0, 4)) {
+    fetchProgress(j.id).then((p) => {
+      const el = root.querySelector(`[data-pl="${CSS.escape(j.id)}"]`);
+      if (el && p) el.textContent = progressLine(j, p);
     });
-    document.getElementById('m-cancel').onclick = closeModal;
-    document.getElementById('m-add').onclick = async (e) => {
-      const topic = document.getElementById('t-topic').value.trim();
-      if (!topic) { toast('Topic required', 'Enter a topic to add.', 'warn'); return; }
-      e.target.disabled = true;
-      const engine = document.getElementById('t-engine').value;
-      const niche = document.getElementById('t-niche').value;
-      try {
-        const res = await api.createJob({ topic, engine, niche });
-        closeModal();
-        toast('Topic added', res.message, 'ok');
-        await refresh();
-      } catch (err) {
-        e.target.disabled = false;
-        toast('Blocked', err.message, 'bad');
-      }
-    };
-  };
-  root.querySelector('#btn-add-topic').onclick = addTopic;
-  const ea = root.querySelector('#empty-add');
-  if (ea) ea.onclick = addTopic;
-
-  if (requestedJob && jobs.some((j) => j.id === requestedJob)) {
-    const full = await api.job(requestedJob);
-    detailDrawer(full.job);
-    history.replaceState(null, '', '#/queue');
   }
+
+  if (requestedJob) await openJob(requestedJob);
 }
 
 export async function renderQueue() {

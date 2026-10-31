@@ -1,7 +1,7 @@
 /* Calendar — scheduling with month/week/day views, IST default */
 import { api } from '../api.js';
 import {
-  icon, esc, fmtDateTime, fmtTime, toast, confirmModal, openModal, closeModal, statusPill,
+  icon, esc, fmtDateTime, fmtTime, toast, confirmModal, openModal, closeModal, statusPill, makerName, errorToast,
 } from '../ui.js';
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -66,10 +66,10 @@ function weekList(jobs) {
     const evs = jobs.filter((j) => jobDayKey(j) === key);
     return `<div class="card">
       <div class="card__head"><h2>${DOW[(d.getDay() + 6) % 7]} · ${d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })}</h2>
-        <div class="right"><span class="tiny muted">${evs.length} item(s)</span></div></div>
+        <div class="right"><span class="tiny muted">${evs.length} video${evs.length === 1 ? '' : 's'}</span></div></div>
       ${evs.length ? `<div class="card__body stack" style="gap:10px">${evs.map((j) => `
         <button class="row" data-cal-job="${j.id}" style="width:100%;text-align:left;gap:12px;padding:10px;border:1px solid var(--border);border-radius:12px">
-          <span class="pill pill--${j.engine === 'gemini' ? 'accent' : 'violet'}">${j.engine === 'gemini' ? 'Gemini' : 'Verticals'}</span>
+          <span class="pill pill--${j.engine === 'gemini' ? 'accent' : 'violet'}">${esc(makerName(j.engine))}</span>
           <span class="small" style="font-weight:650;flex:1;min-width:0" class="truncate">${esc(j.title)}</span>
           ${statusPill(j.status)}
           <span class="tiny muted">${j.scheduledFor ? esc(fmtTime(j.scheduledFor)) : ''}</span>
@@ -88,7 +88,7 @@ function dayList(jobs) {
       ${evs.map((j) => `
         <div class="table__row is-clickable" data-cal-job="${j.id}" style="grid-template-columns:minmax(0,2fr) 1fr 1fr 1.1fr">
           <div class="cell-main"><div class="cell-title">${esc(j.title)}</div><div class="cell-sub">${esc(j.topic || '')}</div></div>
-          <div data-col="Engine">${j.engine === 'gemini' ? 'Gemini' : 'Verticals v3'}</div>
+          <div data-col="Kind">${esc(makerName(j.engine))}</div>
           <div data-col="Time"><span class="small">${j.scheduledFor ? esc(fmtTime(j.scheduledFor)) : '—'}</span></div>
           <div data-col="Status">${statusPill(j.status)}</div>
         </div>`).join('')}
@@ -102,20 +102,21 @@ async function refresh() {
   const jobs = (data.jobs || []).filter((j) => !engineFilter || j.engine === engineFilter);
 
   root.innerHTML = `
+    <a class="back-link" href="#/settings">${icon('chevronL', 'icon--sm')} Settings</a>
     <div class="page-head">
       <div>
         <h1>Calendar</h1>
-        <div class="sub">Scheduling view in ${esc(data.timezone || 'Asia/Kolkata')} (IST) · publishing window ${esc(data.publishingWindow || '18:00–21:00')}</div>
+        <div class="sub">When videos were made, are planned, and went up. Times are India time (IST). Uploads happen between ${esc(data.publishingWindow || '18:00–21:00')}.</div>
       </div>
       <div class="page-head__actions">
         <button class="btn ${data.automationPaused ? 'btn--primary' : 'btn--secondary'}" id="btn-pause">
-          ${icon(data.automationPaused ? 'play' : 'pause', 'icon--sm')} ${data.automationPaused ? 'Resume automation' : 'Pause automation'}
+          ${icon(data.automationPaused ? 'play' : 'pause', 'icon--sm')} ${data.automationPaused ? 'Resume automatic videos' : 'Pause automatic videos'}
         </button>
-        <button class="btn btn--secondary" id="btn-window">${icon('clock', 'icon--sm')} Publishing window</button>
+        <button class="btn btn--secondary" id="btn-window">${icon('clock', 'icon--sm')} Upload times</button>
       </div>
     </div>
 
-    ${data.automationPaused ? `<div class="callout callout--warn" style="margin-bottom:16px">${icon('pause')}<div><strong>Automation paused.</strong> Scheduled runs are on hold — previously generated videos, published records, credentials and configuration are preserved.</div></div>` : ''}
+    ${data.automationPaused ? `<div class="callout callout--warn" style="margin-bottom:16px">${icon('pause')}<div><strong>Automatic videos are paused.</strong> Nothing new starts by itself. Your videos and settings are kept.</div></div>` : ''}
 
     <div class="cal-head" style="margin-bottom:14px">
       <button class="icon-btn" id="cal-prev" aria-label="Previous">${icon('chevronL')}</button>
@@ -132,28 +133,23 @@ async function refresh() {
 
     <div class="row row--wrap" style="gap:14px;margin-bottom:14px">
       <div class="seg" id="engine-filter">
-        <button class="${engineFilter === '' ? 'is-active' : ''}" data-ef="">Both engines</button>
-        <button class="${engineFilter === 'gemini' ? 'is-active' : ''}" data-ef="gemini">Engine A · Gemini</button>
-        <button class="${engineFilter === 'verticals' ? 'is-active' : ''}" data-ef="verticals">Engine B · Verticals</button>
+        <button class="${engineFilter === '' ? 'is-active' : ''}" data-ef="">All</button>
+        <button class="${engineFilter === 'gemini' ? 'is-active' : ''}" data-ef="gemini">Long + Short</button>
+        <button class="${engineFilter === 'verticals' ? 'is-active' : ''}" data-ef="verticals">Short only</button>
       </div>
     </div>
 
     <div class="row row--wrap" style="gap:14px;margin-bottom:14px">
-      <span class="badge-soft badge-soft--accent">${icon('calendar', 'icon--sm')} Daily cap: ${esc(String(data.dailyCap ?? 2))} uploads/day</span>
-      <span class="badge-soft badge-soft--blue">${icon('shield', 'icon--sm')} Review before publish: ${data.reviewRequired ? 'required' : 'off'}</span>
-      <span class="badge-soft badge-soft--neutral">${icon('clock', 'icon--sm')} Next run: ${esc(data.nextRunLabel || '—')}</span>
-      <span class="badge-soft badge-soft--neutral">${icon('history', 'icon--sm')} Last execution: ${esc(data.lastExecutionLabel || '—')}</span>
+      <span class="badge-soft badge-soft--accent">${icon('calendar', 'icon--sm')} Up to ${esc(String(data.dailyCap ?? 2))} uploads a day</span>
+      <span class="badge-soft badge-soft--blue">${icon('shield', 'icon--sm')} ${data.reviewRequired ? 'You check every video first' : 'Your check is OFF'}</span>
+      <span class="badge-soft badge-soft--neutral">${icon('clock', 'icon--sm')} Next automatic video: ${esc(data.nextRunLabel || '—')}</span>
+      <span class="badge-soft badge-soft--neutral">${icon('history', 'icon--sm')} Last run: ${esc(data.lastExecutionLabel || '—')}</span>
     </div>
 
     ${view === 'month' ? monthGrid(jobs, cursor.getFullYear(), cursor.getMonth())
       : view === 'week' ? weekList(jobs) : dayList(jobs)}
 
-    <div class="callout" style="margin-top:18px">${icon('info')}<div>Entries show scheduled jobs, drafts and completed uploads. Click any entry to open its review panel in the Content Queue. Changes to schedules are validated server-side against the duplicate check and daily cap.</div></div>
-
-    <div class="footer-note">
-      <span class="brand-lockup"><span class="mark">${icon('play', 'icon--sm')}</span><strong>DYPOL LABS</strong></span>
-      <span>DYPOL Creator Console</span><span>·</span><span>Calendar</span>
-    </div>`;
+    <div class="callout" style="margin-top:18px">${icon('info')}<div>◆ = Long video + Short, ▶ = Short only. Tap any entry to open the video.</div></div>`;
 
   root.querySelector('#cal-prev').onclick = () => {
     if (view === 'month') cursor.setMonth(cursor.getMonth() - 1);
@@ -181,28 +177,28 @@ async function refresh() {
     refresh();
   });
   root.querySelectorAll('[data-cal-job]').forEach((el) => {
-    el.onclick = () => { location.hash = `#/queue?job=${encodeURIComponent(el.dataset.calJob)}`; };
+    el.onclick = () => { location.hash = `#/videos?job=${encodeURIComponent(el.dataset.calJob)}`; };
   });
   root.querySelector('#btn-pause').onclick = async () => {
     const pausing = !data.automationPaused;
-    if (pausing && !await confirmModal('Pause automation?', 'Future scheduled runs are paused. Generated videos, published records, credentials and configuration are preserved.', 'Pause automation', true)) return;
+    if (pausing && !await confirmModal('Pause automatic videos?', '<p>No new videos start by themselves. You can still make videos by hand. Your videos and settings are kept.</p>', 'Pause', true, 'Keep running')) return;
     try {
       const res = await api.schedule({ automationPaused: pausing });
-      toast(pausing ? 'Automation paused' : 'Automation resumed', res.message, 'ok');
+      toast(pausing ? 'Automatic videos paused' : 'Automatic videos on again', '', 'ok');
       await refresh();
-    } catch (err) { toast('Update failed', err.message, 'bad'); }
+    } catch (err) { errorToast(err, 'Couldn’t change it'); }
   };
   root.querySelector('#btn-window').onclick = () => {
     openModal({
-      title: 'Publishing window & daily cap',
+      title: 'Upload times & daily limit',
       body: `
-        <div class="field"><label class="field__label" for="w-start">Window start (IST)</label>
+        <div class="field"><label class="field__label" for="w-start">Upload from (IST)</label>
           <input class="input" type="time" id="w-start" value="${esc(data.windowStart || '18:00')}"></div>
-        <div class="field"><label class="field__label" for="w-end">Window end (IST)</label>
+        <div class="field"><label class="field__label" for="w-end">Upload until (IST)</label>
           <input class="input" type="time" id="w-end" value="${esc(data.windowEnd || '21:00')}"></div>
-        <div class="field"><label class="field__label" for="w-cap">Max uploads per day</label>
+        <div class="field"><label class="field__label" for="w-cap">Uploads per day</label>
           <input class="input" type="number" min="1" max="10" id="w-cap" value="${esc(String(data.dailyCap ?? 2))}"></div>
-        <div class="field__hint">The cap is enforced server-side at publish time. Upload attempts beyond the cap are blocked, not queued silently.</div>`,
+        <div class="field__hint">Extra uploads are blocked (not queued). Most channels should keep this at 2.</div>`,
       foot: `<button class="btn btn--secondary" id="m-cancel">Cancel</button>
              <button class="btn btn--primary" id="m-save">Save</button>`,
     });
@@ -215,9 +211,9 @@ async function refresh() {
           dailyCap: Number(document.getElementById('w-cap').value),
         });
         closeModal();
-        toast('Schedule settings saved', res.message, 'ok');
+        toast('Saved', 'Upload times updated.', 'ok');
         await refresh();
-      } catch (err) { toast('Save failed', err.message, 'bad'); }
+      } catch (err) { errorToast(err, 'Couldn’t save'); }
     };
   };
 }

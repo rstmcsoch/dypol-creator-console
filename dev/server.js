@@ -147,7 +147,7 @@ function seed() {
       createdAt: o.createdAt || t(30), updatedAt: o.updatedAt || o.createdAt || t(30),
       scheduledFor: o.scheduledFor || null, publishedAt: o.publishedAt || null,
       youtubeId: o.youtubeId || null, youtubeUrl: o.youtubeUrl || null,
-      error: o.error || null, quality: o.quality || qualityDefaults(o.status),
+      error: o.error || null, errorCategory: o.errorCategory || null, quality: o.quality || qualityDefaults(o.status),
       logs: o.logs || defaultLogs(o), runId: o.runId || null,
       demo: true, publishBlocked: null, duplicateOf: null,
     };
@@ -186,6 +186,15 @@ function seed() {
       narration: { state: 'ok', label: 'OK' }, captions: { state: 'ok', label: 'OK' },
       duplicate: { state: 'passed', label: 'Passed' }, oauth: { state: 'ok', label: 'OK' },
     },
+  });
+
+  mk({
+    id: 'job-demo-oceans', engine: 'gemini', title: 'How Ocean Currents Shape Weather',
+    format: 'long-form', status: 'failed', stage: 'Failed: Run Autonomous Production Pipeline', progress: 40,
+    description: 'Ocean currents move heat around the planet. Here is how that changes the weather you feel.',
+    tags: ['Ocean', 'Climate', 'Science'], durationSec: null,
+    createdAt: t(20), updatedAt: t(18), error: 'The narration step produced empty audio.',
+    errorCategory: 'asset',
   });
 
   db.runs.push(
@@ -714,8 +723,11 @@ async function handleApi(req, res, url) {
     }
     counts['needs-review'] = db.jobs.filter((j) => ['needs-review', 'awaiting-review'].includes(j.status)).length;
     counts['generating,rendering,uploading,queued'] = db.jobs.filter((j) => ['generating', 'rendering', 'uploading', 'queued', 'dispatched', 'running'].includes(j.status)).length;
+    const today = new Date().toISOString().slice(0, 10);
+    const used = db.jobs.filter((j) => (j.status === 'uploading') || (j.status === 'published' && (j.publishedAt || '').slice(0, 10) === today)).length;
     return json(res, 200, {
       jobs, counts,
+      cap: { used, limit: db.settings.publishing.dailyCap, resets: '05:30 IST (00:00 UTC)' },
       policyNote: 'All videos require approval before publishing while review-required mode is on. The publish action re-checks duplicates, the daily cap and the upload state server-side.',
     });
   }
@@ -746,6 +758,17 @@ async function handleApi(req, res, url) {
     db.jobs.unshift(job);
     db.activity.unshift({ ts: now(), icon: 'plus', tone: 'amber', title: 'Topic added to plan', sub: title });
     return json(res, 201, { ok: true, jobId: job.id, message: `“${title}” added to the queue.` });
+  }
+
+  const cancelMatch = p.match(/^\/api\/jobs\/([^/]+)\/cancel$/);
+  if (cancelMatch && method === 'POST') {
+    const job = db.jobs.find((j) => j.id === cancelMatch[1]);
+    if (!job) return json(res, 404, { error: 'Job not found.', code: 'not-found' });
+    if (!['queued', 'dispatched', 'running', 'generating', 'rendering'].includes(job.status)) {
+      return json(res, 409, { error: `A ${job.status} job cannot be cancelled.`, code: 'state' });
+    }
+    job.status = 'cancelled'; job.stage = 'Cancelled'; job.error = 'Cancelled by user'; job.updatedAt = now();
+    return json(res, 200, { ok: true, message: 'Cancelled — nothing was published.' });
   }
 
   const jobMatch = p.match(/^\/api\/jobs\/([^/]+)(?:\/(approve|reject|regenerate|schedule|publish))?$/);

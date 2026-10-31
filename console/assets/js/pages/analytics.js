@@ -12,9 +12,9 @@ async function refresh() {
     <div class="card">
       <div class="empty">
         <div class="empty__icon">${icon('wifiOff')}</div>
-        <h3>YouTube Analytics is not connected</h3>
-        <p>${esc(d.reason || 'Live channel metrics require a connected YouTube channel with YouTube Analytics API access. The console will not display invented numbers in place of unavailable data.')}</p>
-        <a class="btn btn--primary btn--sm" href="#/settings">${icon('gear', 'icon--sm')} Open Settings → YouTube</a>
+        <h3>Channel stats aren’t connected yet</h3>
+        <p>${esc('Views and watch time will show here once YouTube stats are connected. Until then nothing is shown — we never guess numbers.')}</p>
+        <a class="btn btn--primary btn--sm" href="#/settings">${icon('gear', 'icon--sm')} Open Settings</a>
       </div>
     </div>`;
 
@@ -63,35 +63,31 @@ async function refresh() {
     </div>`;
 
   root.innerHTML = `
+    <a class="back-link" href="#/settings">${icon('chevronL', 'icon--sm')} Settings</a>
     <div class="page-head">
       <div>
-        <h1>Analytics</h1>
-        <div class="sub">Channel and video performance — from real YouTube APIs only.</div>
+        <h1>Channel stats</h1>
+        <div class="sub">How your videos are doing on YouTube.</div>
       </div>
       <div class="page-head__actions">
         ${d.connected
-          ? `<span class="badge-soft">${icon('check', 'icon--sm')} YouTube Analytics connected</span>`
-          : `<span class="badge-soft" style="background:var(--amber-soft);color:var(--amber);border-color:rgba(180,83,9,.2)">${icon('alert', 'icon--sm')} Not connected</span>`}
+          ? `<span class="badge-soft">${icon('check', 'icon--sm')} Connected</span>`
+          : `<span class="badge-soft" style="background:var(--amber-soft);color:var(--amber);border-color:rgba(180,83,9,.2)">${icon('alert', 'icon--sm')} Not connected yet</span>`}
       </div>
     </div>
 
-    ${d.demo ? `<div class="callout callout--warn" style="margin-bottom:18px">${icon('info')}<div><strong>Illustrative chart data.</strong> The console is in demo mode — these series demonstrate the analytics layout and are not real channel metrics.</div></div>` : ''}
+    ${d.demo ? `<div class="callout callout--warn" style="margin-bottom:18px">${icon('info')}<div><strong>Demo charts.</strong> Pretend numbers to show the layout.</div></div>` : ''}
 
     <div class="grid grid--stats" style="margin-bottom:18px">
-      ${statCard({ iconName: 'eye', tone: 'orange', label: 'Total views', value: d.connected || d.demo ? fmtNum(d.totals?.views) : '—', delta: d.connected ? 'From YouTube Analytics API' : 'Unavailable — not zero' })}
-      ${statCard({ iconName: 'youtube', tone: 'red', label: 'Published videos', value: d.connected || d.demo ? fmtNum(d.totals?.published) : '—', delta: d.connected ? 'All time' : 'Unavailable — not zero' })}
-      ${statCard({ iconName: 'trendUp', tone: 'green', label: 'Avg. view duration', value: d.connected || d.demo ? (d.totals?.avgDuration || '—') : '—', delta: d.connected ? 'Across published videos' : 'Unavailable — not zero' })}
-      ${statCard({ iconName: 'chart', tone: 'blue', label: 'Watch time (hrs)', value: d.connected || d.demo ? fmtNum(d.totals?.watchHours) : '—', delta: d.connected ? 'Last 28 days' : 'Unavailable — not zero' })}
+      ${statCard({ iconName: 'eye', tone: 'orange', label: 'Total views', value: d.connected || d.demo ? fmtNum(d.totals?.views) : '—', delta: d.connected ? 'From YouTube' : 'Not connected yet' })}
+      ${statCard({ iconName: 'youtube', tone: 'red', label: 'Published videos', value: d.connected || d.demo ? fmtNum(d.totals?.published) : '—', delta: d.connected ? 'All time' : 'Not connected yet' })}
+      ${statCard({ iconName: 'trendUp', tone: 'green', label: 'Avg. view duration', value: d.connected || d.demo ? (d.totals?.avgDuration || '—') : '—', delta: d.connected ? 'Across published videos' : 'Not connected yet' })}
+      ${statCard({ iconName: 'chart', tone: 'blue', label: 'Watch time (hrs)', value: d.connected || d.demo ? fmtNum(d.totals?.watchHours) : '—', delta: d.connected ? 'Last 28 days' : 'Not connected yet' })}
     </div>
 
     ${d.connected || d.demo ? charts : notConnected}
 
-    <div class="callout" style="margin-top:18px">${icon('info')}<div><strong>Data honesty.</strong> Unavailable metrics are shown as “—” with an explanation, never as zero. Charts display live API data only when the YouTube Analytics API is connected and authorised in Settings.</div></div>
-
-    <div class="footer-note">
-      <span class="brand-lockup"><span class="mark">${icon('play', 'icon--sm')}</span><strong>DYPOL LABS</strong></span>
-      <span>DYPOL Creator Console</span><span>·</span><span>Analytics</span>
-    </div>`;
+    <div class="callout" style="margin-top:18px">${icon('info')}<div>“—” means not connected yet, not zero. We only show real numbers from YouTube.</div></div>`;
 }
 
 export async function renderAnalytics() {

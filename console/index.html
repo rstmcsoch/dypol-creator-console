@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#FF7100" />
-  <meta name="description" content="DYPOL Creator Console — dual-engine AI YouTube automation command centre by DYPOL LABS." />
+  <meta name="description" content="DYPOL Creator Console — make, check and publish YouTube videos. By DYPOL LABS." />
   <meta name="product" content="DYPOL Creator Console" />
   <meta name="author" content="DYPOL LABS" />
   <title>DYPOL Creator Console</title>
@@ -21,96 +21,85 @@
         </div>
         <div>
           <h1>DYPOL Creator Console</h1>
-          <div class="sub" style="margin-top:1px">
-            <span class="brand-lockup"><span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg></span><strong>DYPOL LABS</strong></span>
-          </div>
+          <div class="sub" style="margin-top:1px">by DYPOL LABS</div>
         </div>
       </div>
-      <p class="sub">Sign in to manage your dual-engine AI video production pipelines.</p>
+      <p class="sub login__lead">Make videos, check them, and publish them to YouTube — all from here.</p>
       <div class="stack" style="margin-top:20px; gap:14px">
         <div class="field">
-          <label class="field__label" for="login-password">Console password</label>
-          <input class="input" type="password" id="login-password" name="password" required
-                 placeholder="Enter your admin password" autocomplete="current-password" />
+          <label class="field__label" for="login-password">Password</label>
+          <input class="input input--lg" type="password" id="login-password" name="password" required
+                 placeholder="Your console password" autocomplete="current-password" />
           <div class="field__hint" id="login-hint"></div>
         </div>
         <label class="remember" for="login-remember">
           <input type="checkbox" id="login-remember" name="remember" />
           <span>Keep me signed in <span class="muted">(30 days; otherwise 7)</span></span>
         </label>
-        <button class="btn btn--primary btn--lg btn--block" type="submit" id="login-submit">
-          Sign in to console
+        <button class="btn btn--primary btn--xl btn--block" type="submit" id="login-submit">
+          Sign in
         </button>
         <div class="callout" id="login-error" hidden></div>
       </div>
       <div class="footer-note" style="margin-top:22px">
-        <span class="brand-lockup"><span class="mark"><svg viewBox="0 0 24 24" fill="none"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg></span><strong>DYPOL LABS</strong></span>
-        <span>·</span><span>Build · Automate · Create</span>
-        <span class="spacer"></span><span>© 2026 DYPOL LABS</span>
+        <span>© 2026 DYPOL LABS</span>
       </div>
     </form>
   </div>
 
   <!-- ============ App shell ============ -->
   <div id="app-root" class="app-shell" hidden>
-    <div class="sidebar-scrim" id="sidebar-scrim"></div>
     <aside class="sidebar" id="sidebar">
       <div class="sidebar__brand">
         <div class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none"><path d="M8 5.5v13l11-6.5z" fill="#fff"/></svg>
         </div>
         <div>
-          <div class="brand-name">DYPOL Creator Console</div>
-          <div class="brand-sub">DYPOL LABS · AI Video Ops</div>
+          <div class="brand-name">Creator Console</div>
+          <div class="brand-sub">DYPOL LABS</div>
         </div>
       </div>
       <nav class="sidebar__nav" id="sidebar-nav" aria-label="Main navigation">
         <!-- filled by app.js -->
       </nav>
       <div class="sidebar__foot">
-        <div class="brand-row">
-          <div class="brand-mark" style="width:28px;height:28px;border-radius:8px" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" style="width:14px;height:14px"><path d="M8 5.5v13l11-6.5z" fill="#fff"/></svg>
-          </div>
-          <div>
-            <strong>DYPOL LABS</strong>
-            <small>Build · Automate · Create</small>
-          </div>
-        </div>
-        <div class="ver">DYPOL Creator Console v1.0.0</div>
+        <div class="ver">DYPOL Creator Console v2.0</div>
       </div>
     </aside>
 
     <div class="main">
       <header class="topbar">
-        <button class="hamburger" id="hamburger" aria-label="Open navigation">
-          <svg class="icon" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-        </button>
-        <div class="topbar__title" id="topbar-title">Overview</div>
+        <div class="topbar__brand" aria-hidden="true">
+          <div class="brand-mark brand-mark--sm"><svg viewBox="0 0 24 24" fill="none"><path d="M8 5.5v13l11-6.5z" fill="#fff"/></svg></div>
+        </div>
+        <div class="topbar__title" id="topbar-title">Home</div>
         <div class="topbar__spacer"></div>
         <div id="topbar-status"></div>
-        <button class="icon-btn hide-xs" id="btn-refresh" title="Refresh data" aria-label="Refresh data">
+        <button class="icon-btn" id="btn-refresh" title="Refresh" aria-label="Refresh">
           <svg class="icon" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
         </button>
-        <button class="icon-btn hide-xs" id="btn-bell" title="Notifications" aria-label="Notifications">
-          <svg class="icon" viewBox="0 0 24 24"><path d="M18 9a6 6 0 1 0-12 0c0 6-2.5 7-2.5 7h17S18 15 18 9"/><path d="M10.3 20a2 2 0 0 0 3.4 0"/></svg>
-        </button>
-        <button class="avatar" id="btn-avatar" title="Account" aria-label="Account menu">D</button>
+        <button class="avatar" id="btn-avatar" title="Account" aria-label="Account menu" aria-haspopup="dialog">D</button>
       </header>
 
       <main class="page" id="page-root" tabindex="-1">
         <!-- routed page content -->
       </main>
     </div>
+
+    <!-- Phone bottom tab bar -->
+    <nav class="tabbar" id="tabbar" aria-label="Main tabs"></nav>
   </div>
 
   <!-- ============ Drawer (video details / run details) ============ -->
   <div class="scrim" id="drawer-scrim"></div>
   <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-hidden="true">
     <div class="drawer__head">
+      <button class="icon-btn icon-btn--bare drawer__back" id="drawer-back" aria-label="Back">
+        <svg class="icon" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg>
+      </button>
       <h2 id="drawer-title">Details</h2>
       <div class="spacer"></div>
-      <button class="icon-btn icon-btn--bare" id="drawer-close" aria-label="Close details">
+      <button class="icon-btn icon-btn--bare" id="drawer-close" aria-label="Close">
         <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>

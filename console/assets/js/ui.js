@@ -113,44 +113,111 @@ export const fmtSecs = (sec) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
-export function statusPill(status) {
-  const map = {
-    published: ['green', 'Published'], uploaded: ['green', 'Uploaded'], completed: ['green', 'Completed'],
-    approved: ['teal', 'Approved'], ok: ['green', 'OK'], passed: ['green', 'Passed'],
-    generating: ['blue', 'Generating'], rendering: ['blue', 'Rendering'], 'in-progress': ['blue', 'In Progress'],
-    running: ['blue', 'In production'], dispatched: ['blue', 'Starting'], uploading: ['violet', 'Uploading'],
-    processing: ['blue', 'Processing'],
-    scheduled: ['gray', 'Scheduled'], queued: ['gray', 'Queued'], draft: ['gray', 'Draft'],
-    'needs-review': ['amber', 'Needs review'], 'awaiting-review': ['amber', 'Awaiting review'],
-    blocked: ['amber', 'Blocked'], duplicate: ['amber', 'Duplicate'], superseded: ['gray', 'Superseded'],
-    failed: ['red', 'Failed'], error: ['red', 'Error'], cancelled: ['gray', 'Cancelled'],
-    rejected: ['gray', 'Rejected'], publish_failed: ['red', 'Upload failed'],
-    'verified-by-upload': ['green', 'Verified by last upload'], 'held-by-engine': ['gray', 'Held by engine'],
-    'not-configured': ['gray', 'Not configured'], unsupported: ['gray', 'Unsupported'],
-    paused: ['amber', 'Paused'], connected: ['green', 'Connected'], disconnected: ['red', 'Disconnected'],
-    'demo-unverified': ['amber', 'Demo · unverified'], disabled: ['gray', 'Disabled'],
-    'missing-credentials': ['amber', 'Credentials missing'],
-    'configured-untested': ['amber', 'Configured · untested'],
-  };
-  const [color, label] = map[status] || ['gray', String(status || 'Unknown').replaceAll('-', ' ')];
-  return `<span class="pill pill--${color}"><span class="dot"></span>${esc(label)}</span>`;
+/* ---------------- One status vocabulary (used everywhere) ----------------
+   tone → colour; help → one plain line; group → which Videos tab it belongs to. */
+export const UI_PREFS = { visibility: 'unlisted', dailyCap: 2 };
+const VIS_WORD = { unlisted: 'Unlisted', private: 'Private', public: 'Public' };
+export const visWord = () => VIS_WORD[UI_PREFS.visibility] || 'Unlisted';
+
+const JOB_STATUS = {
+  queued: ['gray', 'In line', 'Waiting to start. It begins on its own.'],
+  scheduled: ['gray', 'Planned', 'Will start or upload at the planned time.'],
+  draft: ['gray', 'Draft', 'Saved, not being made yet.'],
+  dispatched: ['blue', 'Starting…', 'Sent to the video maker. It usually starts within a minute.'],
+  running: ['blue', 'Being made', 'The video is being made in the cloud (about 15 min).'],
+  generating: ['blue', 'Being made', 'The video is being made in the cloud (about 15 min).'],
+  rendering: ['blue', 'Being made', 'Putting the final video together.'],
+  processing: ['blue', 'Being made', 'The video is being made in the cloud.'],
+  'in-progress': ['blue', 'Being made', 'Still working.'],
+  'needs-review': ['amber', 'Waiting for your check', 'Watch it, then approve, redo or reject. Nothing goes up until you approve.'],
+  'awaiting-review': ['amber', 'Waiting for your check', 'Watch it, then approve, redo or reject. Nothing goes up until you approve.'],
+  approved: ['amber', 'Approved — not uploaded yet', 'Tap Publish now to send it to YouTube.'],
+  uploading: ['violet', 'Uploading to YouTube', 'Sending the video to YouTube. This takes a minute or two.'],
+  published: ['green', 'On YouTube', 'Uploaded. Only people with the link can see it while it is Unlisted.'],
+  uploaded: ['green', 'On YouTube', 'Uploaded to YouTube.'],
+  failed: ['red', 'Didn’t finish', 'Something went wrong while making it. Open it to see what to do.'],
+  error: ['red', 'Didn’t finish', 'Something went wrong. Open it to see what to do.'],
+  publish_failed: ['red', 'Upload didn’t finish', 'The video is fine, but the YouTube upload stopped. Try the upload again.'],
+  rejected: ['gray', 'Rejected', 'You rejected it. It will not be published.'],
+  superseded: ['gray', 'Replaced by a redo', 'A newer version of this video was made.'],
+  cancelled: ['gray', 'Stopped', 'Making was stopped. Nothing was published.'],
+  blocked: ['amber', 'On hold', 'Held by a safety rule. Open it to see why.'],
+  duplicate: ['amber', 'Repeat topic', 'You already have a video on this topic.'],
+  completed: ['green', 'Finished', 'Finished without errors.'],
+  stale: ['amber', 'Taking longer than usual', 'No update for a while. Tap Refresh from the cloud.'],
+  ok: ['green', 'OK', ''], passed: ['green', 'Passed', ''],
+};
+export function statusInfo(status) {
+  const s = JOB_STATUS[status];
+  if (!s) return { tone: 'gray', label: String(status || 'Unknown').replaceAll(/[-_]/g, ' '), help: '' };
+  const label = (status === 'published' || status === 'uploaded') ? `On YouTube (${visWord()})` : s[1];
+  return { tone: s[0], label, help: s[2] };
 }
 
-export const engineLabel = (engine) =>
-  engine === 'gemini' ? 'Gemini Automation'
-  : engine === 'verticals' ? 'Verticals v3'
-  : esc(engine || '—');
+export function statusPill(status) {
+  const other = {
+    'verified-by-upload': ['green', 'Working (proved by last upload)'], 'held-by-engine': ['gray', 'Kept by the video maker'],
+    'not-configured': ['gray', 'Not set up'], unsupported: ['gray', 'Not available'],
+    paused: ['amber', 'Paused'], connected: ['green', 'Connected'], disconnected: ['red', 'Not connected'],
+    'demo-unverified': ['amber', 'Demo'], disabled: ['gray', 'Switched off'],
+    'missing-credentials': ['amber', 'Sign-in missing'], 'configured-untested': ['amber', 'Set up · not tested yet'],
+  };
+  if (other[status]) return `<span class="pill pill--${other[status][0]}"><span class="dot"></span>${esc(other[status][1])}</span>`;
+  const i = statusInfo(status);
+  return `<span class="pill pill--${i.tone}"><span class="dot"></span>${esc(i.label)}</span>`;
+}
+
+/* ---------------- Video makers (engines) in plain words ---------------- */
+export const MAKERS = {
+  gemini: { name: 'Long video + Short', help: 'One 16:9 video plus a matching vertical Short', icon: 'video' },
+  verticals: { name: 'Short only', help: 'One vertical 9:16 Short', icon: 'play' },
+};
+export const makerName = (e) => (MAKERS[e]?.name || (e === 'both' ? 'Both makers' : 'Video maker'));
+
+/* ---------------- Errors that say what to do next ---------------- */
+const ERR = {
+  network: ['No connection', 'Check your internet, then try again.'],
+  duplicate: ['You already made this topic', 'Pick a different topic, or leave the topic empty to let the maker choose.'],
+  'daily-cap': ['Today’s uploads are used up', 'You can publish {cap} videos a day. Try again after 5:30 AM (IST).'],
+  quota: ['Daily limit reached', 'Try again after 5:30 AM (IST).'],
+  paused: ['Automatic videos are paused', 'Turn off “Pause automatic videos” in Settings, then try again.'],
+  'engine-disabled': ['This video maker is switched off', 'Turn it on in Settings → Advanced → Video makers.'],
+  'concurrency-limit': ['Another video is still being made', 'Wait for it to finish (see Home), then try again.'],
+  'not-configured': ['Setup isn’t finished', 'Open Settings → Advanced → Cloud connection.'],
+  github: ['The video maker didn’t answer', 'This is usually temporary. Wait a minute and try again.'],
+  'review-required': ['Check the video first', 'Watch it and tap Approve & publish.'],
+  'retry-limit': ['No tries left', 'Both tries are used. Tap Redo to make a fresh version.'],
+  'already-uploaded': ['Already on YouTube', 'This video was already uploaded, so it was not sent again.'],
+  'already-published': ['Already on YouTube', 'This video was already uploaded, so it was not sent again.'],
+  'upload-in-flight': ['An upload is already running', 'Wait a minute for it to finish, then refresh.'],
+  locked: ['Another upload is running', 'Only one upload at a time. Wait a minute and try again.'],
+  'draft-mode': ['“Make drafts only” is on', 'Nothing goes to YouTube while it is on. Turn it off in Settings → Advanced → Publishing rules.'],
+  throttled: ['Too many tries', 'Wait a minute, then try again.'],
+  'no-media': ['Preview isn’t ready', 'The video file is not available yet. Try again in a few minutes.'],
+  'no-run': ['Nothing to retry', 'This video has no earlier attempt. Tap Redo instead.'],
+  auth: ['Signed out', 'Sign in again to continue.'],
+  csrf: ['Page is out of date', 'Reload the page and try again.'],
+};
+/** {title, msg} for an ApiError: plain words + what to do next. */
+export function friendlyError(err, fallbackTitle = 'That didn’t work') {
+  const code = err?.code || (err?.status === 0 ? 'network' : '');
+  const e = ERR[code];
+  if (e) return { title: e[0], msg: e[1].replace('{cap}', String(UI_PREFS.dailyCap || 2)) };
+  return { title: fallbackTitle, msg: `${err?.message || 'Unexpected error.'} If it keeps happening, check Settings → Advanced → System status.` };
+}
+export function errorToast(err, fallbackTitle) {
+  const f = friendlyError(err, fallbackTitle);
+  toast(f.title, f.msg, 'bad', 7000);
+}
+
+export const engineLabel = (engine) => esc(makerName(engine));
 
 export const enginePill = (engine) =>
-  engine === 'gemini'
-    ? '<span class="pill pill--accent">Gemini</span>'
-    : engine === 'verticals'
-      ? '<span class="pill pill--violet">Verticals v3</span>'
-      : `<span class="pill pill--gray">${esc(engine || '—')}</span>`;
+  `<span class="pill pill--${engine === 'gemini' ? 'accent' : engine === 'verticals' ? 'violet' : 'gray'}">${esc(makerName(engine))}</span>`;
 
 export const typePill = (type) =>
   type === 'long-form' || type === 'long'
-    ? '<span class="tag">Long-form 16:9</span>'
+    ? '<span class="tag">Long video 16:9</span>'
     : type === 'short'
       ? '<span class="tag">Short 9:16</span>'
       : `<span class="tag">${esc(type || '—')}</span>`;
@@ -262,16 +329,17 @@ export function openModal({ title, body, foot }) {
 
 export function closeModal() {
   const wrap = document.getElementById('modal-wrap');
+  document.activeElement?.blur?.();
   wrap.classList.remove('is-open');
   wrap.setAttribute('aria-hidden', 'true');
 }
 
-export function confirmModal(title, bodyHtml, confirmLabel = 'Confirm', danger = false) {
+export function confirmModal(title, bodyHtml, confirmLabel = 'Confirm', danger = false, cancelLabel = 'Cancel') {
   return new Promise((resolve) => {
     openModal({
       title, body: bodyHtml,
-      foot: `<button class="btn btn--secondary" id="m-cancel">Cancel</button>
-             <button class="btn ${danger ? 'btn--danger' : 'btn--primary'}" id="m-ok">${esc(confirmLabel)}</button>`,
+      foot: `<button class="btn btn--secondary" id="m-cancel">${esc(cancelLabel)}</button>
+             <button class="btn ${danger ? 'btn--danger-solid' : 'btn--primary'}" id="m-ok">${esc(confirmLabel)}</button>`,
     });
     const done = (v) => { closeModal(); resolve(v); };
     document.getElementById('m-cancel').onclick = () => done(false);
@@ -346,25 +414,35 @@ export const renderLogs = (logs = []) => {
 
 /* ---------------- Plain-language helpers (no raw infra strings) ---------------- */
 export const FAILURE_LABELS = {
-  llm_unavailable: 'AI model unavailable (temporary)', content_gate: 'Blocked by the name check',
-  asset: 'Visuals / voice asset problem', render: 'Video render failed', publish: 'YouTube upload failed',
-  unknown: 'Unclassified failure', dispatch: 'Engine refused the request', stale: 'Stopped responding',
-  config: 'Missing configuration', permission: 'Permission denied', quota: 'Quota exceeded',
-  provider: 'AI provider error', timeout: 'Timed out', upload: 'Upload rejected', oauth: 'YouTube sign-in problem',
-  github_unavailable: 'GitHub was temporarily unavailable', setup_failed: 'Setup failed', handoff: 'Saving the draft failed',
+  llm_unavailable: 'The AI writer was busy (temporary)', content_gate: 'Stopped by the “no personal names” check',
+  asset: 'A picture, clip or voice file was missing', render: 'Putting the video together failed', publish: 'The YouTube upload failed',
+  unknown: 'Something unexpected went wrong', dispatch: 'The video maker refused to start', stale: 'The video maker stopped answering',
+  config: 'A setting is missing', permission: 'Permission was refused', quota: 'A daily limit was reached',
+  provider: 'An AI service had an error', timeout: 'It took too long and was stopped', upload: 'YouTube refused the upload', oauth: 'YouTube sign-in problem',
+  github_unavailable: 'The cloud was briefly unavailable', setup_failed: 'Getting ready failed', handoff: 'Saving the draft failed',
 };
 export const failureLabel = (c) => FAILURE_LABELS[c] || (c ? String(c).replaceAll('_', ' ') : '');
+/** One line: what the owner should do next for a failure category. */
+export function failureNext(c, retriesLeft = 0) {
+  if (['config', 'permission', 'oauth'].includes(c)) return 'This needs a setup fix first. Check Settings → Advanced → System status.';
+  if (c === 'content_gate') return 'Tap Redo and choose a different topic or wording.';
+  if (c === 'quota') return 'Wait until the daily limit resets (5:30 AM IST), then tap Try again.';
+  if (retriesLeft > 0) return `Tap Try again (${retriesLeft} ${retriesLeft === 1 ? 'try' : 'tries'} left). If it fails again, tap Redo.`;
+  return 'Tap Redo to make a fresh version.';
+}
 
 const STAGE_TEXT = [
-  [/^workflow_dispatch sent$/i, 'Sent to engine'],
-  [/^Running in GitHub Actions$/i, 'Working on it'],
+  [/^workflow_dispatch sent$/i, 'Sent to the video maker'],
+  [/^Running in GitHub Actions$/i, 'Being made'],
   [/^Queued in GitHub Actions$/i, 'Waiting to start'],
   [/^Running: (.+)$/i, 'Working — $1'],
   [/^workflow_dispatch failed$/i, 'Could not start'],
-  [/^Approved — awaiting publish window$/i, 'Approved'],
-  [/^Failed: (.+)$/i, 'Failed at “$1”'],
+  [/^Approved — awaiting publish window$/i, 'Approved — waiting for the upload time'],
+  [/^Failed: (.+)$/i, 'Stopped at “$1”'],
+  [/^Ready for review$/i, 'Ready for your check'],
   [/B-roll nano-banana/gi, 'Visuals'],
   [/workflow_dispatch/gi, 'start request'],
+  [/GitHub Actions/gi, 'the cloud'],
 ];
 /** Human-friendly stage text for a raw stage string. */
 export function friendlyStage(stage) {
