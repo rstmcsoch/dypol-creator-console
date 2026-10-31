@@ -78,7 +78,10 @@ async function refresh() {
   const failed = jobs.filter((j) => ['failed', 'publish_failed'].includes(j.status) && Date.parse(j.updatedAt) > recentCut)
     .filter((j) => { const k = (j.title || j.topic || j.id).toLowerCase(); if (seenTitle.has(k)) return false; seenTitle.add(k); return true; });
   const approved = jobs.filter((j) => j.status === 'approved');
-  const recent = jobs.filter((j) => !MAKING.includes(j.status) && !CHECK.includes(j.status) && j.status !== 'queued').slice(0, 4);
+  const seenRecent = new Set();
+  const recent = jobs.filter((j) => !MAKING.includes(j.status) && !CHECK.includes(j.status) && j.status !== 'queued')
+    .filter((j) => { const k = (j.title || j.topic || j.id).toLowerCase(); if (seenRecent.has(k)) return false; seenRecent.add(k); return true; })
+    .slice(0, 4);
   const cap = list.cap || null;
   const capLimit = cap?.limit ?? UI_PREFS.dailyCap ?? 2;
   const capUsed = cap?.used ?? 0;

@@ -87,7 +87,7 @@ function dayList(jobs) {
     ${evs.length ? `<div class="table">
       ${evs.map((j) => `
         <div class="table__row is-clickable" data-cal-job="${j.id}" style="grid-template-columns:minmax(0,2fr) 1fr 1fr 1.1fr">
-          <div class="cell-main"><div class="cell-title">${esc(j.title)}</div><div class="cell-sub">${esc(j.topic || '')}</div></div>
+          <div class="cell-main"><div class="cell-title">${esc(j.title)}</div>${j.topic && j.topic !== j.title ? `<div class="cell-sub">${esc(j.topic)}</div>` : ''}</div>
           <div data-col="Kind">${esc(makerName(j.engine))}</div>
           <div data-col="Time"><span class="small">${j.scheduledFor ? esc(fmtTime(j.scheduledFor)) : '—'}</span></div>
           <div data-col="Status">${statusPill(j.status)}</div>
