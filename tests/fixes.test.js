@@ -415,11 +415,15 @@ test('P1: regenerate goes through the helper (run row + run id) and handles revi
   assert.equal(rej.status, 200);
   assert.equal((await dbm.getJob(env.DB, job.id)).reviewNote, 'Too much stock footage of crowds');
 
+  // A workflow WITHOUT a reviewer_feedback input: feedback is kept, not sent.
+  let workflowYaml = WORKFLOW_A;
+  gh._resetInputsCache();
+  route('GET', '/contents/.github/workflows/main.yml', () => contentsFile(workflowYaml));
   route('POST', '/dispatches', { status: 200, body: { workflow_run_id: 901 } });
   const res = await regenPost(ctx(env, { id: job.id }));
   const data = await res.json();
   assert.equal(res.status, 202);
-  assert.equal(data.feedbackSent, false, 'main.yml has no reviewer_feedback input');
+  assert.equal(data.feedbackSent, false, 'this main.yml has no reviewer_feedback input');
   const child = await dbm.getJob(env.DB, data.jobId);
   assert.equal(child.runId, '901');
   assert.match(child.reviewNote, /crowds/);
@@ -429,7 +433,7 @@ test('P1: regenerate goes through the helper (run row + run id) and handles revi
 
   // When the workflow declares reviewer_feedback, it is sent (capped).
   gh._resetInputsCache();
-  route('GET', '/contents/.github/workflows/main.yml', contentsFile(WORKFLOW_A.replace('      language:\n', '      reviewer_feedback:\n        type: string\n      language:\n')));
+  workflowYaml = WORKFLOW_A.replace('      language:\n', '      reviewer_feedback:\n        type: string\n      language:\n');
   const job2 = await addJob(env, { status: 'rejected', reviewNote: 'x'.repeat(3000), title: 'Different title for regen 2' });
   const res2 = await regenPost(ctx(env, { id: job2.id }));
   assert.equal((await res2.json()).feedbackSent, true);
@@ -444,15 +448,21 @@ test('P1: reject is refused while uploading', async () => {
   assert.equal(res.status, 409);
 });
 
-test('P1: drawer Retry finds the GitHub run by job_id (not by local row id)', async () => {
+test('P1 (round 3): drawer Retry is a FRESH dispatch on dypol-integration linked to the same job (never rerun)', async () => {
   const env = await makeEnv();
   const job = await addJob(env, { status: 'failed', runId: '1200' });
   await dbm.insertRun(env.DB, { id: 'run-local-x', runId: '1200', engine: 'gemini', workflow: 'main.yml', jobId: job.id, startedAt: iso(-600), status: 'failed', steps: [], logs: [], artifacts: [] });
-  route('POST', '/actions/runs/1200/rerun-failed-jobs', { status: 201, body: {} });
+  route('POST', '/actions/workflows/main.yml/dispatches', { status: 200, body: { workflow_run_id: 1201 } });
   const res = await retryPost(ctx(env, { id: job.id }));
   assert.equal(res.status, 202, JSON.stringify(await res.clone().json()));
-  assert.ok(calls.some((c) => c.url.includes('/actions/runs/1200/rerun-failed-jobs')));
-  assert.equal((await dbm.getJob(env.DB, job.id)).status, 'dispatched');
+  assert.ok(!calls.some((c) => c.url.includes('rerun')), 'never re-runs the old commit');
+  const d = calls.find((c) => c.url.includes('/dispatches'));
+  assert.equal(d.body.ref, 'dypol-integration');
+  assert.equal(d.body.inputs.job_id, job.id);
+  const fresh = await dbm.getJob(env.DB, job.id);
+  assert.equal(fresh.status, 'dispatched');
+  assert.equal(fresh.runId, '1201');
+  assert.equal(fresh.retryCount, 1);
 });
 
 test('P1: fallback strips undeclared inputs, creates its own job, never fires on old history or publish runs', async () => {

@@ -28,6 +28,7 @@ export function rowToJob(r) {
     publishRunId: r.publish_run_id || null,
     uploadingSince: r.uploading_since ? Number(r.uploading_since) : null,
     reviewNote: r.review_note || null,
+    retryCount: Number(r.retry_count || 0),
     videos: parse(r.videos, []),
     errorLog: r.error_log || null,
     demo: false,
@@ -42,6 +43,7 @@ export function rowToRun(r) {
     steps: parse(r.steps, []), logs: parse(r.logs, []), artifacts: parse(r.artifacts, []),
     conclusion: r.conclusion || null, currentStep: r.current_step || null, completedAt: r.completed_at || null,
     phase: r.phase || null,
+    inputs: parse(r.inputs, null),
     demo: false,
   };
 }
@@ -109,7 +111,7 @@ export async function updateJob(db, id, patch) {
     title: 'title', topic: 'topic', niche: 'niche', format: 'format',
     errorCategory: 'error_category', attempt: 'attempt', parentJobId: 'parent_job_id',
     publishRunId: 'publish_run_id', uploadingSince: 'uploading_since', reviewNote: 'review_note',
-    errorLog: 'error_log',
+    errorLog: 'error_log', retryCount: 'retry_count',
   };
   const sets = [], args = [];
   for (const [k, col] of Object.entries(map)) {
@@ -144,26 +146,16 @@ export async function getRun(db, id) {
 }
 
 export async function insertRun(db, run) {
-  if (run.phase) {
-    await db.prepare(`INSERT INTO runs
-      (id, run_id, engine, workflow, job_id, started_at, duration_sec, status,
-       failure_reason, github_url, steps, logs, artifacts, phase)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .bind(run.id, run.runId, run.engine, run.workflow, run.jobId, run.startedAt,
-        run.durationSec, run.status, run.failureReason, run.githubUrl,
-        JSON.stringify(run.steps || []), JSON.stringify(run.logs || []), JSON.stringify(run.artifacts || []),
-        run.phase)
-      .run();
-    return;
-  }
-  await db.prepare(`INSERT INTO runs
-    (id, run_id, engine, workflow, job_id, started_at, duration_sec, status,
-     failure_reason, github_url, steps, logs, artifacts)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-    .bind(run.id, run.runId, run.engine, run.workflow, run.jobId, run.startedAt,
-      run.durationSec, run.status, run.failureReason, run.githubUrl,
-      JSON.stringify(run.steps || []), JSON.stringify(run.logs || []), JSON.stringify(run.artifacts || []))
-    .run();
+  const cols = ['id', 'run_id', 'engine', 'workflow', 'job_id', 'started_at', 'duration_sec', 'status',
+    'failure_reason', 'github_url', 'steps', 'logs', 'artifacts'];
+  const vals = [run.id, run.runId, run.engine, run.workflow, run.jobId, run.startedAt,
+    run.durationSec, run.status, run.failureReason, run.githubUrl,
+    JSON.stringify(run.steps || []), JSON.stringify(run.logs || []), JSON.stringify(run.artifacts || [])];
+  // Optional columns (added by ensureProgressSchema) only when set, so legacy DBs still insert.
+  if (run.phase) { cols.push('phase'); vals.push(run.phase); }
+  if (run.inputs) { cols.push('inputs'); vals.push(JSON.stringify(run.inputs)); }
+  await db.prepare(`INSERT INTO runs (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(',')})`)
+    .bind(...vals).run();
 }
 
 /** Most recent run rows for a job (newest first), optionally one phase. */
@@ -182,7 +174,7 @@ export async function updateRun(db, id, patch) {
   })) {
     if (patch[k] !== undefined) { sets.push(`${col} = ?`); args.push(patch[k]); }
   }
-  for (const [k, col] of [['steps', 'steps'], ['logs', 'logs'], ['artifacts', 'artifacts']]) {
+  for (const [k, col] of [['steps', 'steps'], ['logs', 'logs'], ['artifacts', 'artifacts'], ['inputs', 'inputs']]) {
     if (patch[k] !== undefined) { sets.push(`${col} = ?`); args.push(JSON.stringify(patch[k])); }
   }
   args.push(id);

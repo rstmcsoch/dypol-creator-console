@@ -42,12 +42,16 @@ export function renderProgress(p) {
       ${run?.htmlUrl ? `<a class="btn btn--ghost btn--sm" href="${esc(run.htmlUrl)}" target="_blank" rel="noopener">${icon('github', 'icon--sm')} GitHub run</a>` : ''}
     </div>
     <div class="tiny muted" style="margin-bottom:8px">
+      ${typeof p.percent === 'number' ? `<strong>${p.percent}%</strong> · ` : ''}
       ${p.currentStep ? `${p.done ? 'Last step' : 'Current step'}: <strong>${esc(p.currentStep)}</strong> · ` : ''}
       ${p.stepsTotal ? `${p.stepsFinished}/${p.stepsTotal} steps finished · ` : ''}
-      ${run?.startedAt ? `elapsed ${esc(fmtDuration(liveElapsed(run.startedAt, run.completedAt, run.elapsedSec)))}` : ''}
+      ${run?.neverStarted ? 'GitHub never started this run' : run?.startedAt && !(p.done && !run.completedAt)
+        ? `elapsed ${esc(fmtDuration(liveElapsed(run.startedAt, run.completedAt, run.elapsedSec)))}` : ''}
     </div>`;
   const failing = p.failingStep || (p.jobStatus === 'failed' && run?.failureReason);
   const fail = failing ? `<div class="callout callout--danger" style="margin-bottom:8px">${icon('alert')}<div><strong>Failed${p.failingStep ? ` at step: ${esc(p.failingStep)}` : ''}.</strong> ${esc(run?.failureReason || p.error || '')}</div></div>` : '';
+  const bar = typeof p.percent === 'number' && !p.done
+    ? `<div class="progress" style="margin-bottom:8px" role="progressbar" aria-valuenow="${p.percent}" aria-valuemin="0" aria-valuemax="100"><div class="progress__bar" style="width:${p.percent}%"></div></div>` : '';
   const list = steps.length ? `<div class="qc">${steps.map((s) => `
       <div class="qc__row ${stepClass(s.status)}">
         ${icon(stepIcon(s.status), 'icon--sm')}
@@ -56,7 +60,7 @@ export function renderProgress(p) {
         <span class="pill">${esc(s.status)}</span>
       </div>`).join('')}</div>`
     : `<div class="tiny muted">${p.done ? 'No step data was received for this run.' : 'Waiting for the first step update from GitHub… (Sync GitHub runs is the fallback if webhooks are not delivering.)'}</div>`;
-  return head + fail + list;
+  return head + bar + fail + list;
 }
 
 /**

@@ -1,10 +1,9 @@
 import { json, readBody, uid, nowIso } from '../../_lib/util.js';
 import { getJob, updateJob, appendLog, insertJob, addActivity, getSettings } from '../../_lib/db.js';
 import { classifyError, buildQuality } from '../../_lib/safeguards.js';
-import { dispatchForJob } from '../../_lib/jobflow.js';
+import { dispatchForJob, buildDraftInputs, FEEDBACK_INPUT_MAX } from '../../_lib/jobflow.js';
 
-/** Max reviewer feedback sent as a workflow input (full note stays in D1). */
-export const FEEDBACK_INPUT_MAX = 1500;
+export { FEEDBACK_INPUT_MAX };
 
 /**
  * POST /api/jobs/:id/regenerate { feedback? } — dispatch a NEW generation job
@@ -52,17 +51,11 @@ export async function onRequestPost(context) {
   try {
     result = await dispatchForJob({
       db, env: context.env, settings, job: child, phase: 'draft',
-      inputs: {
-        topic: child.topic,
-        privacy: settings.publishing.visibility,
-        language: settings.defaults?.language || 'en',
-        review_required: settings.publishing.reviewRequired ? '1' : '0',
-        auto_publish: settings.publishing.autoPublish ? '1' : '0',
-        title_override: child.title,
-        description_override: (child.description || '').slice(0, 480),
-        ...(child.engine === 'verticals' ? { niche: child.niche || 'tech' } : {}),
-        ...(feedback ? { reviewer_feedback: feedback.slice(0, FEEDBACK_INPUT_MAX) } : {}),
-      },
+      inputs: buildDraftInputs(settings, child.engine, {
+        topic: child.topic, niche: child.niche || 'tech',
+        titleOverride: child.title, descriptionOverride: child.description || '',
+        reviewerFeedback: feedback,
+      }),
     });
   } catch (err) {
     const cat = classifyError(err.message);

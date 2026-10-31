@@ -21,7 +21,7 @@ import { utcDayStartIso } from './db.js';
 
 export const REFRESH_MS = 30 * 60e3;
 // Bump when the cached panel's shape changes, so a deploy never serves an old shape.
-export const CACHE_KEY = 'panel-v2';
+export const CACHE_KEY = 'panel-v3';
 export const SUBREQUEST_BUDGET = 40; // Workers limit is 50; leave headroom
 export const ACTIONS_FREE_BYTES = 500 * 1024 * 1024; // artifact storage on the Free plan (account-wide)
 export const CACHE_LIMIT_BYTES = 10 * 1024 * 1024 * 1024; // Actions cache: 10 GB per repository, separate from the 500 MB
@@ -63,9 +63,12 @@ export async function writeQuotaCache(db, data, now = Date.now()) {
 
 /* ---------------- log scanning ---------------- */
 const RX = {
-  // Engine A: visuals.trip_breaker() → "⚠️ flux quota/limit hit (HTTP 429); skipping flux …"
-  flux: /(\bflux\b[^\n]{0,40}(quota\/limit hit|circuit|neurons|daily free allocation))|(FLUX circuit)/i,
-  pixabay: /\bpixabay\b[^\n]{0,40}(quota\/limit hit|HTTP 429|rate.?limit)/i,
+  // Both engines (31 Oct 2026+): "DYPOL_PROVIDER_LIMIT provider=<flux|pixabay|wikimedia> …"
+  // Engine A (older runs): visuals.trip_breaker() → "⚠️ flux quota/limit hit (HTTP 429); skipping flux …"
+  flux: /(DYPOL_PROVIDER_LIMIT provider=flux\b)|(\bflux\b[^\n]{0,40}(quota\/limit hit|circuit|neurons|daily free allocation))|(FLUX circuit)/i,
+  pixabay: /(DYPOL_PROVIDER_LIMIT provider=pixabay\b)|(\bpixabay\b[^\n]{0,40}(quota\/limit hit|HTTP 429|rate.?limit))/i,
+  wikimedia: /(DYPOL_PROVIDER_LIMIT provider=wikimedia\b)|(\bwikimedia\b[^\n]{0,40}(quota\/limit hit|HTTP 429|rate.?limit))/i,
+  providerLimit: /DYPOL_PROVIDER_LIMIT provider=([a-z0-9_-]+)/gi,
   judgeCircuit: /visual judge circuit open \(([^)\n]{0,160})\)/i,
   judgeReview: /visual judge needs review/i,
   llm: /DYPOL_FAILURE_CATEGORY=llm_unavailable/,
@@ -84,6 +87,8 @@ export function scanLog(text) {
   return {
     flux: RX.flux.test(t), fluxLine: line(RX.flux),
     pixabay: RX.pixabay.test(t), pixabayLine: line(RX.pixabay),
+    wikimedia: RX.wikimedia.test(t), wikimediaLine: line(RX.wikimedia),
+    providers: [...new Set([...t.matchAll(RX.providerLimit)].map((m) => m[1].toLowerCase()))],
     judgeCircuit: circuit ? circuit[1] : null,
     judgeReview: RX.judgeReview.test(t),
     llmUnavailable: RX.llm.test(t),
@@ -146,6 +151,7 @@ async function collectEngine(engine, { token, settings, jobs, now, budget }) {
     oauth: { state: 'unknown', detail: 'No upload recorded yet' },
     flux: { state: 'unknown', detail: 'Not checked' },
     pixabay: { state: 'unknown', detail: 'Not checked' },
+    wikimedia: { state: 'unknown', detail: 'Not checked' },
     judge: { state: 'unknown', detail: 'Not checked', calls: null },
     llmUnavailable7d: 0,
     storage: { cacheBytes: null, artifactBytes: null, artifactCount: null },
@@ -203,7 +209,7 @@ async function collectEngine(engine, { token, settings, jobs, now, budget }) {
     } catch (err) { out.notes.push(`Runs unavailable (${err.status || 'error'})`); }
   }
   const todayRuns = runs.filter((r) => r.status === 'completed' && (r.startedAt || '') >= dayStart).slice(0, LOG_RUNS_PER_ENGINE);
-  const hits = { flux: null, pixabay: null, circuit: null, review: false, llm: 0 };
+  const hits = { flux: null, pixabay: null, wikimedia: null, circuit: null, review: false, llm: 0 };
   let scanned = 0;
   for (const run of todayRuns) {
     if (!budget.take(1, `${engine} run jobs`)) break;
@@ -215,6 +221,7 @@ async function collectEngine(engine, { token, settings, jobs, now, budget }) {
       scanned++;
       if (s.flux && !hits.flux) hits.flux = s.fluxLine || 'limit hit';
       if (s.pixabay && !hits.pixabay) hits.pixabay = s.pixabayLine || 'limit hit';
+      if (s.wikimedia && !hits.wikimedia) hits.wikimedia = s.wikimediaLine || 'limit hit';
       if (s.judgeCircuit && !hits.circuit) hits.circuit = s.judgeCircuit;
       if (s.judgeReview) hits.review = true;
       if (s.llmUnavailable) hits.llm++;
@@ -238,8 +245,8 @@ async function collectEngine(engine, { token, settings, jobs, now, budget }) {
   };
   out.flux = limitState('flux', hits.flux);
   out.pixabay = limitState('pixabay', hits.pixabay);
-  if (engine === 'verticals' && out.flux.state === 'ok') out.flux.detail += ' (Engine B does not log 429s yet)';
-  if (engine === 'verticals' && out.pixabay.state === 'ok') out.pixabay.detail += ' (Engine B does not log 429s yet)';
+  out.wikimedia = engine === 'verticals' ? limitState('wikimedia', hits.wikimedia)
+    : { state: 'off', detail: 'Engine A does not use Wikimedia' };
 
   if (judge?.skipped) out.judge = { state: 'unknown', detail: 'Not checked (request budget)', calls: null };
   else if (judge && (judge.status || judge.calls)) {

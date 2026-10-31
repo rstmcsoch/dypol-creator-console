@@ -57,10 +57,19 @@ async function gh(token, path, options = {}) {
  * empty 204 (older behaviour) — callers then rely on webhook/time linking.
  * If GitHub rejects the return_run_details parameter itself, the dispatch is
  * retried once without it.
+ *
+ * Transient GitHub errors (HTTP 5xx / network): GitHub had a burst of 500s on
+ * 30 Oct 2026 14:21–14:30 UTC (githubstatus.com "Disruption with GitHub
+ * services") that failed three console dispatches. A 5xx can still have
+ * created the run, so before re-sending, the run list is checked for a
+ * workflow_dispatch run whose run-name carries this job_id (both engine
+ * workflows set run-name: "<job_id> (<phase>)"). Up to 2 re-sends.
  */
-export async function dispatchWorkflow(token, { owner, repo, workflowFile, ref, inputs = {} }) {
-  const path = `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowFile)}/dispatches`;
-  const body = { ref: integrationRef(ref), inputs };
+export const DISPATCH_RETRY_DELAYS_MS = [2500, 6000];
+const isTransient = (err) => !err?.status || err.status >= 500;
+const sleep = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
+
+async function dispatchOnce(token, path, body) {
   let data;
   try {
     data = await gh(token, path, { method: 'POST', body: JSON.stringify({ ...body, return_run_details: true }) });
@@ -73,6 +82,44 @@ export async function dispatchWorkflow(token, { owner, repo, workflowFile, ref, 
   }
   const runId = data?.workflow_run_id ?? data?.id ?? null;
   return { runId: runId ? String(runId) : null, htmlUrl: data?.html_url || null };
+}
+
+/** A workflow_dispatch run for `jobId` created since `sinceMs` (run-name carries the job id). */
+export async function findDispatchedRun(token, { owner, repo, workflowFile, ref, jobId, sinceMs }) {
+  if (!jobId) return null;
+  try {
+    const runs = await listWorkflowRuns(token, { owner, repo, workflowFile, perPage: 10, branch: ref });
+    const hit = runs.find((r) => r.event === 'workflow_dispatch'
+      && String(r.displayTitle || '').includes(String(jobId))
+      && (Date.parse(r.startedAt) || 0) >= sinceMs - 60e3);
+    return hit ? { runId: String(hit.runId), htmlUrl: hit.githubUrl || null, recovered: true } : null;
+  } catch { return null; }
+}
+
+export async function dispatchWorkflow(token, { owner, repo, workflowFile, ref, inputs = {}, retryDelaysMs = DISPATCH_RETRY_DELAYS_MS }) {
+  const path = `/repos/${owner}/${repo}/actions/workflows/${encodeURIComponent(workflowFile)}/dispatches`;
+  const branch = integrationRef(ref);
+  const body = { ref: branch, inputs };
+  const t0 = Date.now();
+  let lastErr = null;
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+    try {
+      const res = await dispatchOnce(token, path, body);
+      return attempt ? { ...res, attempts: attempt + 1 } : res;
+    } catch (err) {
+      if (!isTransient(err)) throw err;
+      lastErr = err;
+      await sleep(retryDelaysMs[Math.min(attempt, retryDelaysMs.length - 1)] ?? 0);
+      const found = await findDispatchedRun(token, { owner, repo, workflowFile, ref: branch, jobId: inputs.job_id, sinceMs: t0 });
+      if (found) return { ...found, attempts: attempt + 1 };
+    }
+  }
+  const status = lastErr?.status || 0;
+  const err = new Error(`GitHub temporarily unavailable (HTTP ${status || 'network error'}) — no run was started after `
+    + `${retryDelaysMs.length + 1} attempts. This is on GitHub's side; Retry is safe. (${lastErr?.message || 'no response'})`);
+  err.status = status || 503;
+  err.transient = true;
+  throw err;
 }
 
 /** List recent workflow runs on the integration branch (optionally per workflow file). */
@@ -124,7 +171,11 @@ export async function listRunJobs(token, { owner, repo, runId }) {
     conclusion: j.conclusion,
     startedAt: j.started_at,
     completedAt: j.completed_at,
-    steps: (j.steps || []).map((s) => ({ name: s.name, status: s.status, conclusion: s.conclusion })),
+    htmlUrl: j.html_url,
+    steps: (j.steps || []).map((s) => ({
+      name: s.name, status: s.status, conclusion: s.conclusion, number: s.number,
+      startedAt: s.started_at, completedAt: s.completed_at,
+    })),
   }));
 }
 
@@ -210,9 +261,9 @@ export async function checkToken(token) {
  *  30 Oct 2026). Used when the workflow file cannot be read live. */
 export const STATIC_WORKFLOW_INPUTS = {
   'main.yml': ['phase', 'topic', 'language', 'privacy', 'job_id', 'draft_run_id', 'review_required',
-    'auto_publish', 'title_override', 'description_override'],
+    'auto_publish', 'title_override', 'description_override', 'reviewer_feedback'],
   'verticals.yml': ['phase', 'topic', 'context', 'niche', 'language', 'privacy', 'job_id', 'draft_run_id',
-    'title_override', 'description_override', 'tags_override', 'review_required', 'auto_publish'],
+    'title_override', 'description_override', 'tags_override', 'review_required', 'auto_publish', 'reviewer_feedback'],
 };
 
 /** Parse `on.workflow_dispatch.inputs` keys out of workflow YAML (no YAML lib). */

@@ -351,6 +351,7 @@ export const FAILURE_LABELS = {
   unknown: 'Unclassified failure', dispatch: 'Engine refused the request', stale: 'Stopped responding',
   config: 'Missing configuration', permission: 'Permission denied', quota: 'Quota exceeded',
   provider: 'AI provider error', timeout: 'Timed out', upload: 'Upload rejected', oauth: 'YouTube sign-in problem',
+  github_unavailable: 'GitHub was temporarily unavailable', setup_failed: 'Setup failed', handoff: 'Saving the draft failed',
 };
 export const failureLabel = (c) => FAILURE_LABELS[c] || (c ? String(c).replaceAll('_', ' ') : '');
 

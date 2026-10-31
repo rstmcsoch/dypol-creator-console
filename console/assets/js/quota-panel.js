@@ -34,6 +34,7 @@ function engineBlock(e) {
     ${row('Last successful upload', e.lastUpload ? fmtAgo(e.lastUpload.at) : 'None yet', e.oauth.state, e.lastUpload ? `${fmtDateTime(e.lastUpload.at)} · ${e.oauth.detail}` : e.oauth.detail)}
     ${row('Cloudflare FLUX quota', e.flux.state === 'bad' ? 'Hit today' : e.flux.state === 'ok' ? 'OK' : '—', e.flux.state, e.flux.detail)}
     ${row('Pixabay limit', e.pixabay.state === 'bad' ? 'Hit today' : e.pixabay.state === 'ok' ? 'OK' : '—', e.pixabay.state, e.pixabay.detail)}
+    ${e.wikimedia && e.wikimedia.state !== 'off' ? row('Wikimedia limit', e.wikimedia.state === 'bad' ? 'Hit today' : e.wikimedia.state === 'ok' ? 'OK' : '—', e.wikimedia.state, e.wikimedia.detail) : ''}
     ${row('NVIDIA visual judge', e.judge.calls === null || e.judge.calls === undefined ? '—' : `${e.judge.calls} call${e.judge.calls === 1 ? '' : 's'}`, e.judge.state, e.judge.detail)}
     ${row('Gemini unavailable (7 days)', String(e.llmUnavailable7d), e.llmUnavailable7d >= 3 ? 'bad' : e.llmUnavailable7d ? 'warn' : 'ok', 'Jobs that failed with llm_unavailable')}
     ${row('Actions artifacts', fmtMB(st.artifactBytes), st.state || 'off', `${st.artifactCount ?? '—'} live artifacts · cache ${fmtMB(st.cacheBytes)} of 10 GB (separate limit)`)}

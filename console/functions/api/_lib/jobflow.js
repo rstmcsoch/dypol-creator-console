@@ -23,7 +23,7 @@ import {
   listRunJobs, fetchJobLogTail, listWorkflowRuns, fetchRunResult,
 } from './github.js';
 import {
-  classifyFailure, recordPublished, findUploadEvidence, FAILURE_CATEGORIES, acquireLock,
+  classifyFailure, classifyByStep, loggedCategory, recordPublished, findUploadEvidence, FAILURE_CATEGORIES, acquireLock,
 } from './safeguards.js';
 
 const ts = () => new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata' });
@@ -41,6 +41,33 @@ function engineGh(settings, engine) {
 }
 
 /* ---------------- Dispatch ---------------- */
+
+/** Max reviewer feedback sent as a workflow input (full note stays in D1). */
+export const FEEDBACK_INPUT_MAX = 1500;
+
+/**
+ * Draft-phase inputs for an engine, from current settings (the policy fields —
+ * privacy, review_required, auto_publish — always come from settings, never
+ * from an older run). Shared by Run, Redo and Retry.
+ */
+export function buildDraftInputs(settings, engine, {
+  topic, context, niche, titleOverride, descriptionOverride, reviewerFeedback,
+} = {}) {
+  return {
+    ...(topic ? { topic: String(topic) } : {}),
+    privacy: settings.publishing.visibility,
+    language: settings.defaults?.language || 'en',
+    review_required: settings.publishing.reviewRequired ? '1' : '0',
+    auto_publish: settings.publishing.autoPublish ? '1' : '0',
+    ...(engine === 'verticals' ? {
+      niche: String(niche || settings.defaults?.niche || 'tech'),
+      ...(context ? { context: String(context).slice(0, 2000) } : {}),
+    } : {}),
+    ...(titleOverride ? { title_override: String(titleOverride) } : {}),
+    ...(descriptionOverride ? { description_override: String(descriptionOverride).slice(0, 480) } : {}),
+    ...(reviewerFeedback ? { reviewer_feedback: String(reviewerFeedback).slice(0, FEEDBACK_INPUT_MAX) } : {}),
+  };
+}
 
 /** Make GitHub run id `ghRunId` belong to local run row `runRowId` (removes an
  *  orphan row the webhook may have created first, unlinks a mis-link). */
@@ -73,6 +100,7 @@ export async function dispatchForJob({ db, env, settings, job, phase, inputs = {
   const runRowId = uid('run');
   await insertRun(db, {
     id: runRowId, runId: null, engine: job.engine, workflow: cfg.workflow, jobId: job.id, phase,
+    inputs: sent,
     startedAt: nowIso(), durationSec: null, status: 'queued', failureReason: null,
     githubUrl: `https://github.com/${cfg.slug}/actions`,
     steps: [{ name: 'workflow_dispatch', status: 'pending' }],
@@ -85,7 +113,10 @@ export async function dispatchForJob({ db, env, settings, job, phase, inputs = {
   });
   let res;
   try {
-    res = await dispatchWorkflow(env.GITHUB_TOKEN, { ...cfg.gh, workflowFile: cfg.workflow, ref: cfg.ref, inputs: sent });
+    res = await dispatchWorkflow(env.GITHUB_TOKEN, {
+      ...cfg.gh, workflowFile: cfg.workflow, ref: cfg.ref, inputs: sent,
+      ...(Array.isArray(env.__dispatchRetryDelaysMs) ? { retryDelaysMs: env.__dispatchRetryDelaysMs } : {}),
+    });
   } catch (err) {
     await updateRun(db, runRowId, { status: 'failed', failureReason: `Dispatch failed: ${err.message}` });
     throw err;
@@ -101,7 +132,7 @@ export async function dispatchForJob({ db, env, settings, job, phase, inputs = {
   } else {
     await updateRun(db, runRowId, { steps: [{ name: 'workflow_dispatch', status: 'done' }] });
   }
-  return { runRowId, ghRunId: res.runId, htmlUrl: res.htmlUrl, stripped, sent };
+  return { runRowId, ghRunId: res.runId, htmlUrl: res.htmlUrl, stripped, sent, attempts: res.attempts || 1, recovered: !!res.recovered };
 }
 
 /* ---------------- Failure reasons ---------------- */
@@ -134,15 +165,27 @@ async function failedGhJob(db, token, gh, ghRunId) {
  */
 export async function failJob(db, env, settings, job, { phase = 'draft', ghRunId, failure, cancelled = false, ghJobId } = {}) {
   const cfg = engineGh(settings, job.engine);
-  let excerpt = '', where = failure || null;
+  let excerpt = '', where = failure || null, fjStep = null;
   if (!cancelled && env.GITHUB_TOKEN && cfg && ghRunId) {
     const fj = ghJobId ? { id: ghJobId } : await failedGhJob(db, env.GITHUB_TOKEN, cfg.gh, ghRunId);
+    fjStep = fj?.step || null;
     if (fj?.step && !where) where = `Step “${fj.step}” failed`;
     if (fj?.id) excerpt = await fetchJobLogTail(env.GITHUB_TOKEN, { ...cfg.gh, jobId: fj.id, lines: 40 });
   }
-  const cat = cancelled ? { category: phase === 'publish' ? 'publish' : 'unknown', retryable: true }
-    : classifyFailure(`${where || ''}\n${excerpt}`, phase);
-  const label = cancelled ? 'Run was cancelled' : FAILURE_CATEGORIES[cat.category];
+  // Order: the category the engine logged (DYPOL_FAILURE_CATEGORY=…) → the
+  // failed step's name (classifyByStep) → keywords in the step + log tail.
+  const stepName = fjStep || (/Step “(.+?)” failed/.exec(where || '') || [])[1] || null;
+  let cat, stepLabel = null;
+  if (cancelled) cat = { category: phase === 'publish' ? 'publish' : 'unknown', retryable: true };
+  else if (loggedCategory(excerpt)) cat = { category: loggedCategory(excerpt), retryable: true };
+  else {
+    const byStep = classifyByStep(stepName);
+    if (byStep && phase === 'publish' && byStep.category === 'handoff') {
+      cat = { category: 'publish', retryable: true }; stepLabel = 'Saving the upload result failed';
+    } else if (byStep) { cat = byStep; stepLabel = byStep.label; }
+    else cat = classifyFailure(`${where || ''}\n${excerpt}`, phase);
+  }
+  const label = cancelled ? 'Run was cancelled' : (stepLabel || FAILURE_CATEGORIES[cat.category] || FAILURE_CATEGORIES.unknown);
   const error = `${label}${where && !cancelled ? ` — ${where}` : ''}`;
   const patch = phase === 'publish'
     ? { status: 'publish_failed', stage: 'Upload failed — not on YouTube', uploadingSince: null }

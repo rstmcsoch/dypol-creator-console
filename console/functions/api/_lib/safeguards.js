@@ -11,13 +11,15 @@
 import { topicKey, normalizeTopic, nowIso, TZ, uid } from './util.js';
 import { findUploadByKey, recordUpload, capUsage, listJobs, updateJob, addActivity } from './db.js';
 
-/** Returns {key, norm, job, exact} or null. */
-export async function findDuplicate(db, title, excludeJobId = null) {
+/** Returns {key, norm, job, exact} or null. `exclude`: a job id or a list of
+ *  ids (a job's lineage) that never count as duplicates of it. */
+export async function findDuplicate(db, title, exclude = null) {
   const key = await topicKey(title);
   const norm = normalizeTopic(title);
+  const skip = new Set([].concat(exclude || []).filter(Boolean));
   const candidates = await listJobs(db, {});
   for (const j of candidates) {
-    if (j.id === excludeJobId) continue;
+    if (skip.has(j.id)) continue;
     if (['rejected', 'failed', 'cancelled', 'superseded'].includes(j.status)) continue;
     const k2 = await topicKey(j.title);
     if (k2 === key) return { key, norm, job: j, exact: true };
@@ -214,6 +216,8 @@ export async function recordPublished(db, job, youtubeId, extra = {}) {
 /* ---------------- Error taxonomy (P2: categories + retryability) ---------------- */
 /* Run-failure categories shown to the reviewer (from the failed job's log). */
 export const FAILURE_CATEGORIES = {
+  setup_failed: 'Setup failed',
+  handoff: 'Saving the draft failed',
   llm_unavailable: 'AI model unavailable (temporary)',
   content_gate: 'Blocked by the name check',
   asset: 'Visuals / voice asset problem',
@@ -221,6 +225,37 @@ export const FAILURE_CATEGORIES = {
   publish: 'YouTube upload failed',
   unknown: 'Unclassified failure',
 };
+
+/** The category an engine logged itself (last DYPOL_FAILURE_CATEGORY=<cat> line), if known. */
+export function loggedCategory(text) {
+  const all = [...String(text || '').matchAll(/DYPOL_FAILURE_CATEGORY=([a-z_]+)/g)];
+  const c = all.length ? all[all.length - 1][1] : null;
+  return c && FAILURE_CATEGORIES[c] ? c : null;
+}
+
+/**
+ * Category + plain label from the failed step's NAME (used when the engine
+ * logged no DYPOL_FAILURE_CATEGORY line). Generic steps ("Run DYPOL
+ * phase-aware production pipeline", "Generate a draft without uploading")
+ * return null so the log text decides.
+ */
+export function classifyByStep(stepName) {
+  const s = String(stepName || '').toLowerCase().replace(/[^a-z0-9 +./_-]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!s) return null;
+  const r = (category, label) => ({ category, label, retryable: true });
+  if (/checkout/.test(s)) return r('setup_failed', 'Setup failed: checkout');
+  if (/install|dependenc|requirements|\bpip\b|\bapt\b|fonts?\b/.test(s)) return r('setup_failed', 'Setup failed: dependency install');
+  if (/set ?up python|setup-python|virtualenv|whisper model|kokoro model|cache/.test(s)) return r('setup_failed', 'Setup failed: tool setup');
+  if (/compile|preflight|validate dypol job id|validate publish handoff|restore youtube oauth/.test(s)) return r('setup_failed', 'Setup failed: preflight checks');
+  if (/personal names|name gate|name check|names? in/.test(s)) return r('content_gate', FAILURE_CATEGORIES.content_gate);
+  if (/(upload|publish|post).*(youtube|video to)|youtube upload|^publish|uploader/.test(s) && !/artifact|debug|preview/.test(s)) {
+    return r('publish', FAILURE_CATEGORIES.publish);
+  }
+  if (/render|ffmpeg|encode|assembl|preview cop|demo gif/.test(s)) return r('render', FAILURE_CATEGORIES.render);
+  if (/artifact|candidate|handoff|commit|save draft|durable/.test(s)) return r('handoff', FAILURE_CATEGORIES.handoff);
+  if (/gemini|\bllm\b|lesson|write (the )?script|generate (the )?(script|content|lesson)/.test(s)) return r('llm_unavailable', FAILURE_CATEGORIES.llm_unavailable);
+  return null;
+}
 
 /** Classify a failed run from its step name + log tail. phase: 'draft'|'publish'. */
 export function classifyFailure(text, phase = 'draft') {
@@ -247,6 +282,7 @@ export function classifyFailure(text, phase = 'draft') {
 }
 
 export const ERROR_CATEGORIES = {
+  github_unavailable: 'GitHub temporarily unavailable',
   dispatch: 'Dispatch failure',
   config: 'Missing configuration',
   permission: 'Permission denied',
@@ -262,8 +298,14 @@ export const ERROR_CATEGORIES = {
 };
 
 export function classifyError(message) {
-  const m = String(message || '').toLowerCase();
+  // Repo names/paths contain "youtube" and "gemini" — never classify on them
+  // (a GitHub 500 on .../gemini-youtube-automation/... used to read as "Upload rejected").
+  const m = String(message || '').toLowerCase()
+    .replace(/[\w.-]*\/?(gemini-youtube-automation|youtube-shorts-pipeline)[\w./-]*/g, ' ');
   if (m.includes('unexpected inputs')) return { category: 'dispatch', retryable: false };
+  if (/temporarily unavailable|github api 5\d\d|http 5\d\d|\b50[0-4]\b.*github|server error|network error/.test(m)) {
+    return { category: 'github_unavailable', retryable: true };
+  }
   if (m.includes('workflow_dispatch') || m.includes('dispatch failed') || m.includes('404') && m.includes('workflow')) return { category: 'dispatch', retryable: true };
   if (m.includes('not configured') || m.includes('missing')) return { category: 'config', retryable: false };
   if (m.includes('403') || m.includes('permission') || m.includes('bad credentials')) return { category: 'permission', retryable: false };

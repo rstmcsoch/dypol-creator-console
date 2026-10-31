@@ -104,13 +104,15 @@ function jobRow(j) {
 function detailDrawer(j) {
   const canApprove = ['needs-review', 'awaiting-review'].includes(j.status);
   const canPublish = ['approved', 'scheduled'].includes(j.status);
-  const canRetry = ['failed', 'publish_failed'].includes(j.status);
+  const canRetry = ['failed', 'cancelled', 'publish_failed'].includes(j.status);
+  const retriesLeft = Math.max(0, 2 - Number(j.retryCount || 0));
   const blocked = canPublish || canApprove ? j.publishBlocked : null;
   const why = {
     reject: REJECTABLE.includes(j.status) ? '' : j.status === 'uploading' ? 'It is uploading right now.' : `A ${friendlyStatus(j.status)} video cannot be rejected.`,
     approve: canApprove ? '' : 'Only videos awaiting review can be approved.',
     publish: canPublish ? (blocked || '') : 'Approve the video first.',
-    retry: canRetry ? '' : 'Only failed runs or failed uploads can be retried.',
+    retry: !canRetry ? 'Only failed runs or failed uploads can be retried.'
+      : j.status !== 'publish_failed' && !retriesLeft ? 'Both retries are used — use Redo for a new attempt.' : '',
     regenerate: ['published', 'uploading'].includes(j.status) ? 'Published or uploading videos cannot be redone — add a new topic instead.' : '',
     edit: j.status === 'published' ? 'Published videos cannot be edited.' : '',
   };
@@ -194,7 +196,7 @@ function detailDrawer(j) {
   const foot = j.status === 'published' ? `<div class="yt-links">${videoLinks(j)}</div>` : `
     ${canApprove ? btn('approve', 'Approve & publish', 'check', 'btn--primary') : ''}
     ${canPublish ? btn('publish', 'Publish', 'upload', 'btn--primary') : ''}
-    ${canRetry ? btn('retry', j.status === 'publish_failed' ? 'Retry upload' : 'Retry', 'run') : ''}
+    ${canRetry ? btn('retry', j.status === 'publish_failed' ? 'Retry upload' : `Retry (${retriesLeft} left)`, 'run') : ''}
     ${REJECTABLE.includes(j.status) ? btn('reject', 'Reject', 'x', 'btn--danger') : ''}
     ${why.regenerate ? '' : btn('regenerate', 'Redo', 'refresh')}
     ${blocked && (canPublish || (canApprove && !/review|Approve the video/i.test(blocked))) ? `<div class="small" style="flex-basis:100%;color:var(--amber, #b45309)">${icon('lock', 'icon--sm')} ${esc(blocked)}</div>` : ''}`;

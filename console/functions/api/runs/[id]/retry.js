@@ -1,47 +1,19 @@
 import { json } from '../../_lib/util.js';
-import { getRun, getSettings, getJob, updateRun, appendLog } from '../../_lib/db.js';
-import { splitRepo, rerunFailedJobs } from '../../_lib/github.js';
-import { checkPublishGate, releaseLock, recordPublished } from '../../_lib/safeguards.js';
+import { getRun, getJob, getSettings } from '../../_lib/db.js';
+import { retryJob } from '../../_lib/retry.js';
 
-/** POST /api/runs/:id/retry — safe retry of a failed run. */
+/** POST /api/runs/:id/retry — retry the run's job with a fresh dispatch (see _lib/retry.js). */
 export async function onRequestPost(context) {
   const db = context.env.DB;
   const run = await getRun(db, context.params.id);
   if (!run) return json(null, 404, { error: 'Run not found.', code: 'not-found' });
-  if (run.status !== 'failed') {
-    return json(null, 409, { error: 'Only failed runs can be retried.', code: 'state' });
+  if (!run.jobId) {
+    return json(null, 409, { error: 'This run is not linked to a video in the console — start a new run from Pipelines.', code: 'no-job' });
   }
-
-  // Blind-retry protection: verify the upload state before re-running.
-  // AUDIT FIX: read-only check — no lock side effects on the retry path.
-  if (run.jobId) {
-    const job = await getJob(db, run.jobId);
-    const settings = await getSettings(db);
-    if (job) {
-      const gate = await checkPublishGate(db, job, settings);
-      if (gate.code === 'already-uploaded') {
-        await recordPublished(db, job, gate.youtubeId);
-        await appendLog(db, job, {
-          ts: new Date().toLocaleTimeString('en-GB'), level: 'warn',
-          msg: `Retry suppressed — upload verified (id=${gate.youtubeId}). No duplicate upload.`,
-        });
-        return json(null, 200, { ok: true, message: gate.message });
-      }
-    }
+  const job = await getJob(db, run.jobId);
+  if (job && run.runId && job.runId && String(job.runId) !== String(run.runId) && !['failed', 'cancelled', 'publish_failed'].includes(job.status)) {
+    return json(null, 409, { error: 'This video already has a newer run. Open the video to see it.', code: 'state' });
   }
-
-  if (!context.env.GITHUB_TOKEN || !run.runId) {
-    return json(null, 409, { error: 'GitHub token or run ID unavailable — retry from the GitHub Actions UI.', code: 'not-configured' });
-  }
-  const settings = await getSettings(db);
-  try {
-    await rerunFailedJobs(context.env.GITHUB_TOKEN, { ...splitRepo(settings.github[run.engine]?.repo), runId: run.runId });
-  } catch (err) {
-    return json(null, 502, { error: `Retry failed: ${err.message}`, code: 'github' });
-  }
-  await updateRun(db, run.id, {
-    status: 'in-progress', failureReason: null,
-    logs: [...run.logs, { ts: new Date().toLocaleTimeString('en-GB'), level: 'info', msg: 'Re-run of failed jobs requested' }],
-  });
-  return json(null, 202, { ok: true, message: `Re-run requested for GitHub run ${run.runId}.` });
+  const { status, body } = await retryJob({ db, env: context.env, settings: await getSettings(db), job, source: 'run history' });
+  return json(null, status, body);
 }

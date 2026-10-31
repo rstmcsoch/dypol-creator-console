@@ -127,12 +127,15 @@ export function findLocalRun(runs, engine, ghr) {
   const byId = runs.find((r) => String(r.runId) === String(ghr.runId) && r.engine === engine);
   if (byId) return { run: byId, by: 'run_id' };
   const title = String(ghr.displayTitle || '');
-  const byJob = runs.find((r) => !r.runId && r.engine === engine && r.jobId && title.includes(r.jobId));
+  // An unlinked row that is already terminal is a dispatch GitHub refused
+  // (e.g. HTTP 500) — never attach a later run (a Retry's) to it.
+  const open = (r) => !r.runId && !TERMINAL_RUN.includes(r.status);
+  const byJob = runs.find((r) => open(r) && r.engine === engine && r.jobId && title.includes(r.jobId));
   if (byJob) return { run: byJob, by: 'job_id' };
   if (ghr.event === 'workflow_dispatch') {
     const ghStart = Date.parse(ghr.startedAt) || 0;
     const candidates = runs
-      .filter((r) => !r.runId && r.engine === engine && r.jobId
+      .filter((r) => open(r) && r.engine === engine && r.jobId
         && Math.abs(ghStart - (Date.parse(r.startedAt) || 0)) < 5 * 60 * 1000)
       .sort((a, b) => Math.abs(ghStart - Date.parse(a.startedAt)) - Math.abs(ghStart - Date.parse(b.startedAt)));
     if (candidates[0]) return { run: candidates[0], by: 'time' };
@@ -213,9 +216,9 @@ export const PROGRESS_SCHEMA = [
 ];
 const ADD_COLUMNS = {
   runs: [['conclusion', 'TEXT'], ['current_step', 'TEXT'], ['completed_at', 'TEXT'], ['updated_at', 'TEXT'],
-    ['phase', 'TEXT']],
+    ['phase', 'TEXT'], ['inputs', 'TEXT']],
   jobs: [['current_step', 'TEXT'], ['publish_run_id', 'TEXT'], ['uploading_since', 'INTEGER'],
-    ['review_note', 'TEXT'], ['videos', 'TEXT'], ['error_log', 'TEXT']],
+    ['review_note', 'TEXT'], ['videos', 'TEXT'], ['error_log', 'TEXT'], ['retry_count', 'INTEGER']],
 };
 
 export async function ensureProgressSchema(db, { force = false } = {}) {
@@ -390,8 +393,21 @@ async function applyToJob(db, env, settings, local, status, { failure, currentSt
   return null;
 }
 
-/** Progress % from real step counts (never fabricated; capped at 99 while running). */
-function stepProgress(summary) {
+/**
+ * Progress % from real steps (never fabricated): index of the current
+ * (first in-progress) step / total steps, capped at 99 until the run's
+ * completed event sets 100. With no running step, the finished count is used.
+ * jobs: [{steps:[{number,status}]}] (webhook / API shape).
+ */
+export function stepPercent(jobs) {
+  const steps = (jobs || []).flatMap((j) => [...(j.steps || [])].sort((a, b) => (a.number || 0) - (b.number || 0)));
+  if (!steps.length) return null;
+  let idx = steps.findIndex((s) => s.status === 'in_progress');
+  if (idx < 0) idx = steps.filter((s) => s.status === 'completed').length;
+  return Math.min(99, Math.max(0, Math.round((idx / steps.length) * 100)));
+}
+function stepProgress(summary, jobs) {
+  if (jobs) return stepPercent(jobs);
   if (!summary.total) return null;
   return Math.min(99, Math.round((summary.finished / summary.total) * 100));
 }
@@ -457,7 +473,7 @@ export async function handleWorkflowRun(db, env, settings, engine, ghr, { repo }
   const jobBefore = local.jobId ? await getJob(db, local.jobId) : null;
   const publishRun = isPublishRun(local, jobBefore);
   const jobChange = regress ? null : await applyToJob(db, env, settings, local, status, {
-    failure, currentStep: summary.current?.step, progress: stepProgress(summary),
+    failure, currentStep: summary.current?.step, progress: stepProgress(summary, ghJobs.length ? ghJobs : null),
     completedAt: TERMINAL_RUN.includes(status) ? (ghr.updatedAt || nowIso()) : undefined,
   });
   if (local.jobId && summary.current?.step && !regress) await setJobStep(db, local.jobId, summary.current.step);
@@ -496,7 +512,8 @@ export async function handleWorkflowJob(db, env, settings, engine, wj, { repo } 
   }
   if (!local) return { linked: false, stored: true };
 
-  const summary = summarizeSteps(await loadRunJobs(db, runId));
+  const storedJobs = await loadRunJobs(db, runId);
+  const summary = summarizeSteps(storedJobs);
   const step = summary.current?.step || null;
   await setRunExtras(db, local.id, { currentStep: step });
   if (!local.githubUrl || /\/actions$/.test(local.githubUrl)) {
@@ -515,7 +532,7 @@ export async function handleWorkflowJob(db, env, settings, engine, wj, { repo } 
   } else if (!TERMINAL_RUN.includes(local.status)) {
     const status = wj.status === 'in_progress' || summary.finished > 0 ? 'in-progress' : 'queued';
     if (status === 'in-progress' && local.status !== 'in-progress') await updateRun(db, local.id, { status });
-    jobChange = await applyToJob(db, env, settings, local, status, { currentStep: step, progress: stepProgress(summary) });
+    jobChange = await applyToJob(db, env, settings, local, status, { currentStep: step, progress: stepProgress(summary, storedJobs) });
   }
   if (local.jobId && step) await setJobStep(db, local.jobId, step);
   return { linked: true, runRecord: local.id, currentStep: step, job: jobChange };

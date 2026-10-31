@@ -2,7 +2,7 @@
  * Lightweight progress payload for the dashboard poll (D1 only — no GitHub
  * API calls, so polling every few seconds is free-tier safe).
  */
-import { ensureProgressSchema, loadRunJobs, summarizeSteps, mapStepStatus, ACTIVE_JOB_STATUSES } from './webhook.js';
+import { ensureProgressSchema, loadRunJobs, summarizeSteps, mapStepStatus, stepPercent, ACTIVE_JOB_STATUSES } from './webhook.js';
 
 const secs = (a, b) => (a ? Math.max(0, Math.round(((b ? Date.parse(b) : Date.now()) - Date.parse(a)) / 1000)) : null);
 
@@ -29,6 +29,14 @@ export async function buildProgress(db, { job = null, runRow = null } = {}) {
     ? ACTIVE_JOB_STATUSES.includes(job.status) || job.status === 'uploading'
     : runActive;
   const done = !active;
+  // Percent: current step index / total (capped 99) while running; 100 once the
+  // job reached review/published; null when no step data exists.
+  const reachedEnd = job ? ['needs-review', 'awaiting-review', 'approved', 'scheduled', 'published'].includes(job.status)
+    : runStatus === 'completed';
+  const percent = reachedEnd ? 100 : stepPercent(ghJobs);
+  // A terminal run without any completion time (e.g. a dispatch GitHub refused)
+  // has no elapsed time — never let it tick forever in the drawer.
+  const endAt = run?.completed_at || (runDone ? run?.updated_at : null) || null;
   const updatedAt = [run?.updated_at, ...ghJobs.map((j) => j.updated_at)].filter(Boolean).sort().pop() || null;
   return {
     jobId: job?.id || run?.job_id || null,
@@ -39,6 +47,7 @@ export async function buildProgress(db, { job = null, runRow = null } = {}) {
     failingStep: summary.failing?.step || null,
     stepsTotal: summary.total,
     stepsFinished: summary.finished,
+    percent,
     done,
     pollAfterMs: done ? null : 7000,
     source: ghJobs.length ? 'webhook' : 'registry',
@@ -46,8 +55,9 @@ export async function buildProgress(db, { job = null, runRow = null } = {}) {
     run: run ? {
       id: run.id, runId: run.run_id, status: run.status, conclusion: run.conclusion || null,
       htmlUrl: run.github_url || null, startedAt: run.started_at || null,
-      completedAt: run.completed_at || null, failureReason: run.failure_reason || null,
-      elapsedSec: secs(run.started_at, run.completed_at || (runDone ? run.updated_at : null)),
+      completedAt: endAt, failureReason: run.failure_reason || null,
+      elapsedSec: runDone && !endAt ? null : secs(run.started_at, endAt),
+      neverStarted: runDone && !run.run_id,
     } : null,
     jobs: ghJobs.map((j) => ({
       id: j.id, name: j.name, status: mapStepStatus(j.status, j.conclusion), conclusion: j.conclusion,

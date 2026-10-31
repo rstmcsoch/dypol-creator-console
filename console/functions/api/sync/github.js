@@ -3,6 +3,8 @@ import { listRuns, updateRun, getSettings } from '../_lib/db.js';
 import { splitRepo, listWorkflowRuns, listRunArtifacts, integrationRef } from '../_lib/github.js';
 import { ensureProgressSchema, handleWorkflowRun } from '../_lib/webhook.js';
 import { reconcileJobs } from '../_lib/jobflow.js';
+import { refreshRunFromApi, liveRunIdFor } from '../_lib/liveprogress.js';
+import { listJobs } from '../_lib/db.js';
 
 /**
  * POST /api/sync/github — reconcile the console with GitHub Actions
@@ -60,6 +62,16 @@ export async function onRequestPost(context) {
       }
     }
   }
+
+  // Live step progress for in-flight jobs (workflow_job webhooks carry no
+  // step movement mid-job). At most 3 runs, 1–2 subrequests each.
+  try {
+    const live = (await listJobs(db, {})).map((j) => ({ j, id: liveRunIdFor(j) })).filter((x) => x.id).slice(0, 3);
+    for (const { j, id } of live) {
+      const r = await refreshRunFromApi(db, runEnv, settings, { ghRunId: id, engine: j.engine });
+      if (r?.refreshed) { updated++; messages.push(`run ${id}: steps refreshed${r.finished ? ' (finished)' : ''}`); }
+    }
+  } catch (err) { messages.push(`step refresh failed — ${err.message}`); }
 
   let rec = { changes: [] };
   try {

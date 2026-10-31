@@ -1,7 +1,7 @@
 import { json, readBody, uid, nowIso } from '../../_lib/util.js';
 import { getSettings, insertJob, addActivity, listJobs, getJob } from '../../_lib/db.js';
 import { findDuplicate, classifyError, buildQuality, ERROR_CATEGORIES } from '../../_lib/safeguards.js';
-import { dispatchForJob } from '../../_lib/jobflow.js';
+import { dispatchForJob, buildDraftInputs } from '../../_lib/jobflow.js';
 
 /**
  * POST /api/engines/:engine/run  { topic?, phase? }
@@ -74,17 +74,10 @@ export async function onRequestPost(context) {
   const demoted = requested === 'full' && phase === 'draft';
   const inputs = {
     phase,
-    ...(title ? { topic: title } : {}),
-    privacy: settings.publishing.visibility,
-    language: settings.defaults.language || 'en',
-    review_required: settings.publishing.reviewRequired ? '1' : '0',
-    auto_publish: settings.publishing.autoPublish ? '1' : '0',
-    ...(engine === 'verticals' ? {
-      niche: String(body.niche || settings.defaults.niche || 'tech'),
-      ...(body.context ? { context: String(body.context).slice(0, 2000) } : {}),
-    } : {}),
-    ...(body.titleOverride ? { title_override: body.titleOverride } : {}),
-    ...(body.descriptionOverride ? { description_override: body.descriptionOverride } : {}),
+    ...buildDraftInputs(settings, engine, {
+      topic: title, niche: body.niche, context: body.context,
+      titleOverride: body.titleOverride, descriptionOverride: body.descriptionOverride,
+    }),
   };
 
   const job = {

@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   uploading_since INTEGER,
   review_note   TEXT,
   videos        TEXT,
-  error_log     TEXT
+  error_log     TEXT,
+  retry_count   INTEGER DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
@@ -63,7 +64,8 @@ CREATE TABLE IF NOT EXISTS runs (
   current_step   TEXT,
   completed_at   TEXT,
   updated_at     TEXT,
-  phase          TEXT
+  phase          TEXT,
+  inputs         TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at DESC);
