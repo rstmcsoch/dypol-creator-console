@@ -464,5 +464,5 @@ test('quota: DYPOL_PROVIDER_LIMIT lines from Engine A and Engine B (incl. Wikime
   assert.equal(a.flux, true);
   assert.equal(quota.scanLog('⚠️ pixabay quota/limit hit (HTTP 429); skipping').pixabay, true, 'pre-round-3 Engine A line');
   assert.equal(quota.scanLog('fetched 12 pixabay hits').pixabay, false);
-  assert.equal(quota.CACHE_KEY, 'panel-v3');
+  assert.equal(quota.CACHE_KEY, 'panel-v4');
 });

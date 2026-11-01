@@ -314,6 +314,7 @@ test('quota API: per-engine panel within the subrequest budget, cached in D1 for
   assert.equal(ea.uploadsToday.videos, 2);
   assert.equal(ea.oauth.state, 'ok');
   assert.equal(ea.flux.state, 'bad');
+  assert.equal(ea.nvidiaFlux.state, 'ok', 'backup image maker: no nvidia_flux limit in the log');
   assert.equal(ea.pixabay.state, 'ok');
   assert.equal(ea.judge.calls, 5);
   assert.equal(ea.judge.state, 'ok');

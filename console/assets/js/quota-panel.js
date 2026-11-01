@@ -20,7 +20,7 @@ const plainDetail = (d) => {
   let s = String(d || '');
   const cut = s.search(/\(?HTTP \d{3}|\{"|\{'/);
   if (cut > -1) s = s.slice(0, cut).trim();
-  return s.replace(/flux quota\/limit hit/i, 'Daily image limit reached').replace(/[\s(:·-]+$/, '');
+  return s.replace(/nvidia_flux quota\/limit hit/i, 'Daily backup image limit reached').replace(/flux quota\/limit hit/i, 'Daily image limit reached').replace(/[\s(:·-]+$/, '');
 };
 const row = (label, value, state, sub = '') => `
   <div class="qrow">
@@ -40,6 +40,7 @@ function engineBlock(e) {
     ${row('Uploaded today', `${e.uploadsToday.videos} video${e.uploadsToday.videos === 1 ? '' : 's'}`, 'ok', `${e.uploadsToday.jobs} approved video${e.uploadsToday.jobs === 1 ? '' : 's'}`)}
     ${row('Last upload', e.lastUpload ? fmtAgo(e.lastUpload.at) : 'None yet', e.oauth.state, e.lastUpload ? `${fmtDateTime(e.lastUpload.at)} · ${e.oauth.detail}` : e.oauth.detail)}
     ${row('Image maker (daily limit)', e.flux.state === 'bad' ? 'Hit today' : e.flux.state === 'ok' ? 'OK' : '—', e.flux.state, e.flux.detail)}
+    ${e.nvidiaFlux ? row('Backup image maker (daily limit)', e.nvidiaFlux.state === 'bad' ? 'Hit today' : e.nvidiaFlux.state === 'ok' ? 'OK' : '—', e.nvidiaFlux.state, e.flux.state === 'bad' && e.nvidiaFlux.state !== 'bad' ? 'In use today: the main image maker reached its daily limit' : e.nvidiaFlux.detail) : ''}
     ${row('Stock videos (limit)', e.pixabay.state === 'bad' ? 'Hit today' : e.pixabay.state === 'ok' ? 'OK' : '—', e.pixabay.state, e.pixabay.detail)}
     ${e.wikimedia && e.wikimedia.state !== 'off' ? row('Free image library (limit)', e.wikimedia.state === 'bad' ? 'Hit today' : e.wikimedia.state === 'ok' ? 'OK' : '—', e.wikimedia.state, e.wikimedia.detail) : ''}
     ${row('Picture quality checker', e.judge.calls === null || e.judge.calls === undefined ? '—' : `${e.judge.calls} call${e.judge.calls === 1 ? '' : 's'}`, e.judge.state, e.judge.detail)}
