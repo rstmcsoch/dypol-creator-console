@@ -12,6 +12,7 @@ import { uid, nowIso } from './util.js';
 import { getJob, insertJob, updateJob, addActivity } from './db.js';
 import { findDuplicate, buildQuality } from './safeguards.js';
 import { dispatchForJob } from './jobflow.js';
+import { isDeleting } from './deletejob.js';
 
 export const FALLBACK_FRESH_MS = 30 * 60 * 1000;
 
@@ -28,6 +29,7 @@ export async function maybeDispatchFallback({ db, env, token, settings, engine, 
   if (!done || now - done > FALLBACK_FRESH_MS) return null;
   const job = local?.jobId ? await getJob(db, local.jobId) : null;
   if (!job) return null;
+  if (await isDeleting(db, job.id)) return null;
   if (job.publishRunId || ['uploading', 'publish_failed', 'published', 'approved', 'scheduled'].includes(job.status)) return null;
   const title = job.title || displayTitle;
   const dup = title && settings.publishing?.dedupe ? await findDuplicate(db, title, job.id) : null;
@@ -52,7 +54,7 @@ export async function maybeDispatchFallback({ db, env, token, settings, engine, 
         fallback_of: job.id, // stripped automatically unless the workflow declares it
       },
     });
-    await addActivity(db, { icon: 'zap', tone: 'amber', title: 'Fallback engine dispatched', sub: title });
+    await addActivity(db, { icon: 'zap', tone: 'amber', title: 'Fallback engine dispatched', sub: title, jobId: child.id });
     return { dispatched: true, jobId: child.id, message: `fallback: Verticals v3 dispatched for “${title}” (primary draft genuinely failed)` };
   } catch (err) {
     await updateJob(db, child.id, { status: 'failed', stage: 'Fallback dispatch failed', error: err.message, errorCategory: 'dispatch' });

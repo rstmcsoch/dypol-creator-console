@@ -724,7 +724,7 @@ async function handleApi(req, res, url) {
     counts['needs-review'] = db.jobs.filter((j) => ['needs-review', 'awaiting-review'].includes(j.status)).length;
     counts['generating,rendering,uploading,queued'] = db.jobs.filter((j) => ['generating', 'rendering', 'uploading', 'queued', 'dispatched', 'running'].includes(j.status)).length;
     const today = new Date().toISOString().slice(0, 10);
-    const used = db.jobs.filter((j) => (j.status === 'uploading') || (j.status === 'published' && (j.publishedAt || '').slice(0, 10) === today)).length;
+    const used = db.jobs.filter((j) => (j.status === 'uploading') || (j.status === 'published' && (j.publishedAt || '').slice(0, 10) === today)).length + ((db.deletedPublished || {})[new Date().toISOString().slice(0, 10)] || 0);
     return json(res, 200, {
       jobs, counts,
       cap: { used, limit: db.settings.publishing.dailyCap, resets: '05:30 IST (00:00 UTC)' },
@@ -758,6 +758,37 @@ async function handleApi(req, res, url) {
     db.jobs.unshift(job);
     db.activity.unshift({ ts: now(), icon: 'plus', tone: 'amber', title: 'Topic added to plan', sub: title });
     return json(res, 201, { ok: true, jobId: job.id, message: `“${title}” added to the queue.` });
+  }
+
+  /* --- Delete video (demo): same contract as functions/api/jobs/[id]/delete.js --- */
+  const delMatch = p.match(/^\/api\/jobs\/([^/]+)\/delete$/);
+  if (delMatch) {
+    const id = decodeURIComponent(delMatch[1]);
+    const job = db.jobs.find((j) => j.id === id);
+    const active = (j) => ['dispatched', 'running', 'generating', 'rendering', 'queued'].includes(j.status);
+    const onYT = (j) => !!(j.youtubeId || (j.videos || []).length);
+    if (method === 'GET') {
+      if (!job) return json(res, 404, { error: 'This video is already gone.', code: 'not-found' });
+      const hasRun = !['queued'].includes(job.status);
+      const runs = hasRun ? (job.status === 'published' ? 2 : job.retryCount ? 1 + job.retryCount : 1) : 0;
+      const counts = { attempts: 1, githubRuns: runs, savedFiles: hasRun ? runs * 2 : 0,
+        repoFiles: job.status === 'published' ? (job.engine === 'gemini' ? 2 : 2) : hasRun && job.engine === 'verticals' ? 1 : 0,
+        planEntries: 0, planShared: 0, dashboardRows: 1 + runs, youtubeStays: onYT(job) ? ((job.videos || []).length || 1) : 0, beingMade: active(job) ? 1 : 0 };
+      return json(res, 200, { ok: true, jobId: id, counts, items: [], youtubeStays: counts.youtubeStays, beingMade: counts.beingMade, uploading: job.status === 'uploading', notes: ['demo'] });
+    }
+    if (method === 'POST' || method === 'DELETE') {
+      if (!job) return json(res, 200, { ok: true, state: 'done', alreadyGone: true });
+      if (job.status === 'uploading') return json(res, 409, { state: 'refused', code: 'uploading', error: 'This video is uploading to YouTube right now. Delete it after the upload finishes.' });
+      if (active(job) && job.status !== 'queued' && !job._stopping) { job._stopping = true; return json(res, 200, { state: 'waiting', retryAfterMs: 1500 }); }
+      const yt = onYT(job) ? 1 : 0;
+      const today = new Date().toISOString().slice(0, 10);
+      if (job.status === 'published' && (job.publishedAt || '').slice(0, 10) === today) {
+        db.deletedPublished = db.deletedPublished || {};
+        db.deletedPublished[today] = (db.deletedPublished[today] || 0) + 1; // cap counts uploads, not existing videos
+      }
+      db.jobs = db.jobs.filter((j) => j.id !== id);
+      return json(res, 200, { ok: true, state: 'done', youtubeStays: yt, results: [] });
+    }
   }
 
   const cancelMatch = p.match(/^\/api\/jobs\/([^/]+)\/cancel$/);

@@ -23,6 +23,7 @@ import { nowIso, topicKey } from './util.js';
 import {
   getJob, updateJob, appendLog, addActivity, runsForJob, findUploadByKey,
 } from './db.js';
+import { isDeleting } from './deletejob.js';
 import { findDuplicate, recordPublished, classifyError } from './safeguards.js';
 import { dispatchForJob, buildDraftInputs } from './jobflow.js';
 
@@ -75,6 +76,7 @@ export async function retryInputs(db, settings, job) {
 
 export async function retryJob({ db, env, settings, job, source = 'job', allowPublish = false }) {
   if (!job) return out(404, { error: 'Job not found.', code: 'not-found' });
+  if (await isDeleting(db, job.id)) return out(409, { error: 'This video is being deleted.', code: 'deleting' });
 
   if (job.status === 'publish_failed') {
     if (!allowPublish) {
@@ -158,7 +160,7 @@ export async function retryJob({ db, env, settings, job, source = 'job', allowPu
       + ` · inputs ${from}${sentFeedback ? ' incl. reviewer feedback' : ''}`
       + (res.stripped?.length ? ` · not declared, not sent: ${res.stripped.join(', ')}` : ''),
   });
-  await addActivity(db, { icon: 'refresh', tone: 'blue', title: 'Retry started', sub: `${job.title} · retry ${used + 1}/${MAX_RETRIES}` });
+  await addActivity(db, { icon: 'refresh', tone: 'blue', title: 'Retry started', sub: `${job.title} · retry ${used + 1}/${MAX_RETRIES}`, jobId: job.id });
   return out(202, {
     ok: true, jobId: job.id, runId: res.runRowId, ghRunId: res.ghRunId || null, retryCount: used + 1,
     message: `Retry ${used + 1}/${MAX_RETRIES} started as a fresh run on the latest code${res.ghRunId ? ` (GitHub run ${res.ghRunId})` : ''}.`,

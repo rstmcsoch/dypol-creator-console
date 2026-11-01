@@ -1,6 +1,7 @@
 import { json, readBody, nowIso } from '../../_lib/util.js';
 import { getJob, getSettings, updateJob, appendLog, addActivity } from '../../_lib/db.js';
 import { findDuplicate, checkPublishGate, buildQuality } from '../../_lib/safeguards.js';
+import { pendingDeletions } from '../../_lib/deletejob.js';
 
 /**
  * GET /api/jobs/:id — full review-panel payload.
@@ -33,6 +34,8 @@ export async function onRequestGet(context) {
     ...(job.quality?.narration && job.quality.narration.source ? { narration: job.quality.narration } : {}),
   };
 
+  const deleting = await pendingDeletions(db);
+  if (deleting.has(job.id)) job.deletion = deleting.get(job.id);
   return json(null, 200, { job, mode: 'live' });
 }
 
@@ -63,6 +66,6 @@ export async function onRequestPatch(context) {
     ts: new Date().toLocaleTimeString('en-GB'), level: 'info',
     msg: 'Metadata edited in review panel — will be used for publishing',
   });
-  await addActivity(db, { icon: 'doc', tone: 'blue', title: 'Metadata updated', sub: patch.title || job.title });
+  await addActivity(db, { icon: 'doc', tone: 'blue', title: 'Metadata updated', sub: patch.title || job.title, jobId: job.id });
   return json(null, 200, { ok: true, job: await getJob(db, job.id), message: 'Metadata saved and will be used when publishing.' });
 }

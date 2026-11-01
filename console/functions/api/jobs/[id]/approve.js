@@ -29,7 +29,7 @@ export async function onRequestPost(context) {
     ts: new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata' }), level: 'ok',
     msg: `Approved by reviewer (visibility=${settings.publishing.visibility})`,
   });
-  await addActivity(db, { icon: 'check', tone: 'green', title: 'Video approved', sub: job.title });
+  await addActivity(db, { icon: 'check', tone: 'green', title: 'Video approved', sub: job.title, jobId: job.id });
   if (body.publish === false) {
     return json(null, 200, { ok: true, approved: true, message: 'Approved. Tap Publish when ready.' });
   }

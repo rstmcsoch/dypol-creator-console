@@ -11,10 +11,12 @@ import {
 } from './safeguards.js';
 import { splitRepo } from './github.js';
 import { dispatchForJob } from './jobflow.js';
+import { isDeleting } from './deletejob.js';
 
 const ts = () => new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata' });
 
 export async function publishJob(db, env, settings, job) {
+  if (await isDeleting(db, job.id)) return { status: 409, body: { error: 'This video is being deleted.', code: 'deleting' } };
   // ---- Blind-retry protection for an upload that may have completed -------
   if (job.status === 'uploading' || job.status === 'publish_failed') {
     const slug = settings.github[job.engine]?.repo;
@@ -58,7 +60,7 @@ export async function publishJob(db, env, settings, job) {
       const cat = classifyError(gate.error);
       await appendLog(db, job, { ts: ts(), level: 'error', msg: `Publish blocked — ${gate.error}` });
       await updateJob(db, job.id, { publishBlocked: gate.error });
-      await addActivity(db, { icon: 'lock', tone: 'amber', title: 'Publish blocked', sub: `${job.title} — ${cat.category}` });
+      await addActivity(db, { icon: 'lock', tone: 'amber', title: 'Publish blocked', sub: `${job.title} — ${cat.category}`, jobId: job.id });
       return { status: gate.code === 'locked' ? 423 : 409, body: { error: gate.error, code: gate.code } };
     }
 

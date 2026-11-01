@@ -12,6 +12,7 @@ import {
   disabledAttr, makerName, statusInfo, errorToast, UI_PREFS, visWord,
 } from '../ui.js';
 import { mountProgress, progressLine, fetchProgress } from '../progress.js';
+import { deleteVideos, runDeletes } from '../delete.js';
 
 // Every job state belongs to exactly one chip, so the chips add up to "All".
 const STATUS_TABS = [
@@ -43,7 +44,9 @@ function videoLinks(j, big = false) {
 
 const NICHES = ['general', 'tech', 'science', 'education', 'finance', 'gaming', 'motivation'];
 
-let view = { seg: null, tab: '', q: '', engine: '', type: '', niche: '', date: '', sort: 'newest', selected: null };
+let view = { seg: null, tab: '', q: '', engine: '', type: '', niche: '', date: '', sort: 'newest', selected: null, picking: false, picked: new Set() };
+const asVideo = (j) => ({ id: j.id, title: j.title || j.topic || 'Video', statusLabel: statusInfo(j.status).label });
+const deletionLine = (j) => (j.deletion ? (j.deletion.running ? 'Being deleted…' : 'Deletion not finished — open it and tap Retry delete') : '');
 
 function filterQuery() {
   const p = new URLSearchParams();
@@ -94,7 +97,11 @@ function reasonSheet({ title, intro, okLabel, danger = false, optional = false, 
 function card(j) {
   const info = statusInfo(j.status);
   const err = ['failed', 'publish_failed'].includes(j.status);
+  const picking = view.picking && view.seg === 'all';
+  const picked = view.picked.has(j.id);
   return `
+  <div class="vwrap ${picked ? 'is-picked' : ''}">
+  ${picking ? `<label class="vpick" aria-label="Select ${esc(j.title || 'video')}"><input type="checkbox" data-pick="${esc(j.id)}" ${picked ? 'checked' : ''} ${j.status === 'uploading' ? 'disabled' : ''}></label>` : ''}
   <button class="vitem" data-job="${esc(j.id)}">
     ${thumb(j)}
     <span class="vitem__text">
@@ -104,9 +111,12 @@ function card(j) {
       ${err ? `<span class="vitem__err">${esc(failureLabel(j.errorCategory) || 'Something went wrong')}</span>` : ''}
       ${['dispatched', 'running', 'generating', 'rendering', 'uploading'].includes(j.status) ? `<span class="vitem__sub" data-pl="${esc(j.id)}">${esc(progressLine(j, null))}</span>` : ''}
       ${info.tone === 'amber' && ['needs-review', 'awaiting-review'].includes(j.status) ? '<span class="vitem__cta">Tap to check it</span>' : ''}
+      ${j.deletion ? `<span class="vitem__err">${esc(deletionLine(j))}</span>` : ''}
     </span>
     ${icon('chevronR', 'icon--sm')}
-  </button>`;
+  </button>
+  ${picking ? '' : `<button class="vdel" data-del="${esc(j.id)}" aria-label="Delete ${esc(j.title || 'video')}" title="Delete">${icon('trash', 'icon--sm')}</button>`}
+  </div>`;
 }
 
 function stateBanner(j, retriesLeft) {
@@ -145,7 +155,9 @@ function detailDrawer(j) {
   const QC_NAMES = { title: 'Title length', metadata: 'Title & description', artifact: 'Video file', duration: 'Video length', narration: 'Voice', captions: 'Captions', duplicate: 'Repeat-topic check', oauth: 'YouTube sign-in', review: 'Your check', rights: 'Image & music rights' };
 
   const body = `
-    ${stateBanner(j, retriesLeft)}
+    ${j.deletion ? `<div class="state state--red">${icon('alert')}<div><strong>${j.deletion.running ? 'Being deleted…' : 'Deletion not finished'}</strong>
+      <span>Some parts couldn’t be removed yet${j.deletion.remaining?.githubRuns ? ` (${j.deletion.remaining.githubRuns} GitHub run${j.deletion.remaining.githubRuns === 1 ? '' : 's'} left)` : ''}. Nothing was touched on YouTube.</span>
+      <button class="btn btn--danger-solid btn--sm" id="btn-retry-delete" style="margin-top:8px;align-self:flex-start">${icon('refresh', 'icon--sm')} Retry delete</button></div></div>` : stateBanner(j, retriesLeft)}
     ${hasRun ? `<div class="media-review">
       <video controls preload="metadata" playsinline class="player ${j.format === 'short' ? 'player--short' : ''}" src="${media('video')}"></video>
       <div class="row row--wrap" style="gap:8px;margin-top:8px">
@@ -218,7 +230,13 @@ function detailDrawer(j) {
           ${renderLogs(j.logs || [])}
         </div>
       </div>
-    </details>`;
+    </details>
+
+    <section class="danger-zone">
+      <div><strong>Delete video</strong>
+        <span>Removes it from the dashboard and GitHub (runs, logs, saved files).${j.status === 'published' || (j.videos || []).length ? ' The video stays on YouTube.' : ''}${['dispatched', 'running', 'generating', 'rendering'].includes(j.status) ? ' It is stopped first.' : ''}</span></div>
+      <button class="btn btn--danger btn--sm" id="btn-delete" ${j.status === 'uploading' ? disabledAttr('It is uploading right now — delete it after the upload finishes.') : ''}>${icon('trash', 'icon--sm')} Delete</button>
+    </section>`;
 
   const btn = (action, label, ic, cls = 'btn--secondary') =>
     `<button class="btn ${cls}" data-jact="${action}" ${disabledAttr(why[action])}>${icon(ic, 'icon--sm')} ${label}</button>`;
@@ -265,6 +283,13 @@ function detailDrawer(j) {
       })
       .catch(() => { credits.textContent = 'Picture sources unavailable.'; });
   }
+
+  const afterDelete = () => { closeDrawer(); refresh().catch(() => {}); };
+  document.getElementById('btn-delete')?.addEventListener('click', async (ev) => {
+    if (ev.currentTarget.getAttribute('aria-disabled') === 'true') { toast('Can’t delete yet', ev.currentTarget.dataset.why || '', 'warn'); return; }
+    await deleteVideos([asVideo(j)], { onChange: afterDelete });
+  });
+  document.getElementById('btn-retry-delete')?.addEventListener('click', () => runDeletes([asVideo(j)], [], { onChange: afterDelete }));
 
   document.getElementById('btn-edit-meta')?.addEventListener('click', (ev) => {
     if (ev.currentTarget.getAttribute('aria-disabled') === 'true') return;
@@ -446,10 +471,17 @@ async function refresh() {
       </div>
     </details>
 
+    ${view.seg === 'all' && jobs.length ? `<div class="row pick-head">
+      ${view.picking ? `<label class="small"><input type="checkbox" id="pick-all" ${jobs.every((j) => view.picked.has(j.id) || j.status === 'uploading') ? 'checked' : ''}> Select all shown</label>
+        <button class="btn btn--ghost btn--sm" id="pick-cancel">Cancel</button>`
+      : `<button class="btn btn--ghost btn--sm" id="pick-start">${icon('check', 'icon--sm')} Select videos to delete</button>`}
+    </div>` : ''}
     ${jobs.length ? `<div class="vlist-big">${jobs.map(card).join('')}</div>
       <div class="tiny muted" style="margin:10px 2px">Showing ${jobs.length} of ${counts.all ?? jobs.length} videos</div>`
       : `<div class="card">${emptyState(empty[0], empty[1], empty[2], `<a class="btn btn--primary btn--lg" href="#/make">${icon('plus', 'icon--sm')} Make a new video</a>`)}</div>`}
 
+    ${view.picking && view.seg === 'all' ? `<div class="bulkbar"><span><strong>${view.picked.size}</strong> selected</span>
+      <button class="btn btn--danger-solid" id="bulk-delete" ${view.picked.size ? '' : 'disabled'}>${icon('trash', 'icon--sm')} Delete ${view.picked.size || ''}</button></div>` : ''}
     <div class="callout" style="margin-top:14px">${icon('shield')}<div>You check every video before it goes up. Approve sends it to YouTube as ${esc(visWord())}; the daily limit and repeat-topic check are always applied.</div></div>`;
 
   root.querySelectorAll('[data-seg]').forEach((b) => {
@@ -477,7 +509,42 @@ async function refresh() {
   const clear = root.querySelector('#q-clear');
   if (clear) clear.onclick = () => { Object.assign(view, { tab: '', q: '', engine: '', type: '', niche: '', date: '', sort: 'newest' }); refresh(); };
 
-  root.querySelectorAll('[data-job]').forEach((row) => { row.onclick = () => openJob(row.dataset.job); });
+  root.querySelectorAll('[data-job]').forEach((row) => {
+    row.onclick = () => {
+      if (view.picking && view.seg === 'all') {
+        const j = jobs.find((x) => x.id === row.dataset.job);
+        if (j && j.status !== 'uploading') { if (view.picked.has(j.id)) view.picked.delete(j.id); else view.picked.add(j.id); refresh(); }
+        return;
+      }
+      openJob(row.dataset.job);
+    };
+  });
+  root.querySelectorAll('[data-pick]').forEach((cb) => {
+    cb.onchange = () => { if (cb.checked) view.picked.add(cb.dataset.pick); else view.picked.delete(cb.dataset.pick); refresh(); };
+  });
+  root.querySelectorAll('[data-del]').forEach((b) => {
+    b.onclick = async (ev) => {
+      ev.stopPropagation();
+      const j = jobs.find((x) => x.id === b.dataset.del);
+      if (!j) return;
+      if (j.status === 'uploading') { toast('Can’t delete yet', 'It is uploading right now — delete it after the upload finishes.', 'warn'); return; }
+      await deleteVideos([asVideo(j)], { onChange: () => refresh().catch(() => {}) });
+    };
+  });
+  const pickStart = root.querySelector('#pick-start');
+  if (pickStart) pickStart.onclick = () => { view.picking = true; view.picked = new Set(); refresh(); };
+  const pickCancel = root.querySelector('#pick-cancel');
+  if (pickCancel) pickCancel.onclick = () => { view.picking = false; view.picked = new Set(); refresh(); };
+  const pickAll = root.querySelector('#pick-all');
+  if (pickAll) pickAll.onchange = () => { for (const j of jobs) if (j.status !== 'uploading') { if (pickAll.checked) view.picked.add(j.id); else view.picked.delete(j.id); } refresh(); };
+  const bulk = root.querySelector('#bulk-delete');
+  if (bulk) bulk.onclick = async () => {
+    const chosen = jobs.filter((j) => view.picked.has(j.id)).map(asVideo);
+    // selections from other filters/pages that are not on screen are kept by id
+    for (const id of view.picked) if (!chosen.some((c) => c.id === id)) chosen.push({ id, title: id });
+    const ok = await deleteVideos(chosen, { onChange: () => { view.picking = false; view.picked = new Set(); refresh().catch(() => {}); } });
+    if (!ok) refresh().catch(() => {});
+  };
   for (const j of jobs.filter((x) => ['dispatched', 'running', 'generating', 'rendering'].includes(x.status)).slice(0, 4)) {
     fetchProgress(j.id).then((p) => {
       const el = root.querySelector(`[data-pl="${CSS.escape(j.id)}"]`);

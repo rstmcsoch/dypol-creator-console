@@ -211,7 +211,12 @@ export async function capUsage(db, now = Date.now()) {
   // Every upload dispatched by this build stamps uploading_since; a row
   // without it predates the fix and is left to the reconciler (not counted).
   const uploading = (results || []).filter((r) => r.uploading_since && Number(r.uploading_since) >= sixH).length;
-  return { published: Number(pub?.n || 0), uploading, total: Number(pub?.n || 0) + uploading, dayStart };
+  // Videos published today and later deleted from the dashboard still used a
+  // slot (the cap counts uploads, not existing videos).
+  const led = await db.prepare('SELECT deleted_published AS n FROM cap_ledger WHERE day = ?')
+    .bind(dayStart.slice(0, 10)).first().catch(() => null);
+  const published = Number(pub?.n || 0) + Number(led?.n || 0);
+  return { published, uploading, total: published + uploading, dayStart, deletedToday: Number(led?.n || 0) };
 }
 
 export async function uploadsOnDate(db, dateStr) {
@@ -219,7 +224,15 @@ export async function uploadsOnDate(db, dateStr) {
   return Number(r?.n || 0);
 }
 
-export async function addActivity(db, { icon, tone, title, sub }) {
+export async function addActivity(db, { icon, tone, title, sub, jobId }) {
+  if (jobId) {
+    // job_id lets Delete video remove the job's feed rows exactly.
+    try {
+      await db.prepare('INSERT INTO activity (id, ts, icon, tone, title, sub, job_id) VALUES (?,?,?,?,?,?,?)')
+        .bind(uid('act'), nowIso(), icon, tone, title, sub, jobId).run();
+      return;
+    } catch { /* column not migrated yet */ }
+  }
   await db.prepare('INSERT INTO activity (id, ts, icon, tone, title, sub) VALUES (?,?,?,?,?,?)')
     .bind(uid('act'), nowIso(), icon, tone, title, sub).run();
 }

@@ -2,6 +2,7 @@ import { json, readBody, uid, nowIso, topicKey } from '../_lib/util.js';
 import { listJobs, insertJob, addActivity, getSettings, capUsage } from '../_lib/db.js';
 import { findDuplicate } from '../_lib/safeguards.js';
 import { backgroundReconcile } from '../_lib/jobflow.js';
+import { pendingDeletions } from '../_lib/deletejob.js';
 
 /** GET /api/jobs — searchable, filterable queue. */
 export const ALL_STATUSES = ['queued', 'dispatched', 'running', 'generating', 'rendering', 'needs-review',
@@ -31,9 +32,11 @@ export async function onRequestGet(context) {
   counts['generating,rendering,uploading,queued'] = all.filter((j) => ['generating', 'rendering', 'uploading', 'queued', 'dispatched', 'running'].includes(j.status)).length;
   const settings = await getSettings(db);
   const usage = await capUsage(db);
+  const deleting = await pendingDeletions(db);
+  for (const j of jobs) if (deleting.has(j.id)) j.deletion = deleting.get(j.id);
   return json(null, 200, {
     jobs, counts,
-    cap: { used: usage.total, published: usage.published, uploading: usage.uploading, limit: settings.publishing.dailyCap, resets: '05:30 IST (00:00 UTC)' },
+    cap: { used: usage.total, published: usage.published, deletedToday: usage.deletedToday || 0, uploading: usage.uploading, limit: settings.publishing.dailyCap, resets: '05:30 IST (00:00 UTC)' },
     policyNote: 'All videos require approval before publishing while review-required mode is on. The publish action re-checks duplicates, the daily cap and the upload state server-side.',
   });
 }
@@ -76,6 +79,6 @@ export async function onRequestPost(context) {
     runId: null, publishBlocked: null, duplicateOf: null, demo: false,
   };
   await insertJob(db, job);
-  await addActivity(db, { icon: 'plus', tone: 'amber', title: 'Topic added to plan', sub: title });
+  await addActivity(db, { icon: 'plus', tone: 'amber', title: 'Topic added to plan', sub: title, jobId: job.id });
   return json(null, 201, { ok: true, jobId: job.id, message: `“${title}” added to the queue.` });
 }

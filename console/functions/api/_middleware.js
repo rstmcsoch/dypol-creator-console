@@ -11,6 +11,7 @@
  */
 import { json, verifySessionToken, cookieHeader } from './_lib/util.js';
 import { ensureProgressSchema } from './_lib/webhook.js';
+import { isDeleting } from './_lib/deletejob.js';
 
 export async function onRequest(context) {
   const request = context.request;
@@ -51,6 +52,13 @@ export async function onRequest(context) {
   // Idempotent, cached per isolate: new columns exist before any handler runs.
   if (context.env?.DB) {
     try { await ensureProgressSchema(context.env.DB); } catch { /* handler reports DB errors */ }
+    // A video being deleted takes no other changes (approve, publish, retry,
+    // redo, reject, edit, schedule, stop) until the deletion finishes.
+    const m = /^\/api\/jobs\/([^/]+)(?:\/([a-z-]+))?$/.exec(path);
+    if (m && m[2] !== 'delete' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
+      && await isDeleting(context.env.DB, decodeURIComponent(m[1]))) {
+      return json(null, 409, { error: 'This video is being deleted.', code: 'deleting' });
+    }
   }
   return context.next();
 }

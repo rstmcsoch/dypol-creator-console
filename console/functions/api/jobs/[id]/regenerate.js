@@ -81,7 +81,7 @@ export async function onRequestPost(context) {
     ts: new Date().toLocaleTimeString('en-GB'), level: 'info',
     msg: `Regenerated as new attempt ${child.attempt} (job ${child.id}) — history preserved`,
   });
-  await addActivity(db, { icon: 'refresh', tone: 'blue', title: 'Regeneration dispatched', sub: `${original.title} · attempt ${child.attempt}` });
+  await addActivity(db, { icon: 'refresh', tone: 'blue', title: 'Regeneration dispatched', sub: `${original.title} · attempt ${child.attempt}`, jobId: child.id });
 
   return json(null, 202, {
     ok: true, jobId: child.id, attempt: child.attempt, ghRunId: result.ghRunId, feedbackSent,

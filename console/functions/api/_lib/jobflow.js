@@ -25,6 +25,7 @@ import {
 import {
   classifyFailure, classifyByStep, loggedCategory, recordPublished, findUploadEvidence, FAILURE_CATEGORIES, acquireLock,
 } from './safeguards.js';
+import { deletingIds } from './deletejob.js';
 
 const ts = () => new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata' });
 
@@ -195,7 +196,7 @@ export async function failJob(db, env, settings, job, { phase = 'draft', ghRunId
   });
   await appendLog(db, await getJob(db, job.id), { ts: ts(), level: 'error', msg: `${error}${ghRunId ? ` (GitHub run ${ghRunId})` : ''}` });
   await addActivity(db, {
-    icon: 'alert', tone: 'red', title: phase === 'publish' ? 'Upload failed' : 'Run failed', sub: `${job.title} — ${label}`,
+    icon: 'alert', tone: 'red', title: phase === 'publish' ? 'Upload failed' : 'Run failed', sub: `${job.title} — ${label}`, jobId: job.id,
   });
   return patch.status;
 }
@@ -321,7 +322,9 @@ export async function reconcileJobs(db, env, settings, { force = false, now = Da
     }
   }
 
+  const deleting = await deletingIds(db);
   for (const job of jobs) {
+    if (deleting.has(job.id)) continue; // Delete video in progress
     const cfg = engineGh(settings, job.engine);
     if (!cfg) continue;
     let phase = null;
@@ -391,7 +394,7 @@ export async function reconcileJobs(db, env, settings, { force = false, now = Da
           error: null, errorCategory: null, errorRetryable: null, errorLog: null,
         });
         await appendLog(db, fresh, { ts: ts(), level: 'ok', msg: `GitHub run ${ghRunId} succeeded — ready for review (reconciled)` });
-        await addActivity(db, { icon: 'check', tone: 'violet', title: 'Video ready for review', sub: job.title });
+        await addActivity(db, { icon: 'check', tone: 'violet', title: 'Video ready for review', sub: job.title, jobId: job.id });
         changes.push(`${job.title}: needs-review`);
       } else if (st === 'failed' || st === 'cancelled') {
         await failJob(db, env, settings, fresh, { phase, ghRunId, cancelled: st === 'cancelled' });

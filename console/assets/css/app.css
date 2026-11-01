@@ -1190,3 +1190,32 @@ details.adv > summary > .muted::first-letter { text-transform: uppercase; }
 .modal-wrap { background: rgba(20, 22, 26, .55); }
 .cal-more { color: var(--accent-700); font-weight: 700; text-decoration: underline; padding: 2px 0; }
 #visual-credits details summary { cursor: pointer; }
+
+/* Delete video (31 Oct 2026) */
+.vwrap { position: relative; display: flex; align-items: stretch; gap: 8px; }
+.vwrap .vitem { flex: 1; min-width: 0; padding-right: 52px; }
+.vwrap.is-picked .vitem { border-color: var(--red); background: #FFF8F8; }
+.vdel { position: absolute; right: 8px; bottom: 8px; width: 40px; height: 40px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); color: var(--ink-3); display: grid; place-items: center; }
+.vdel:hover { color: var(--red); border-color: rgba(198, 40, 40, .35); }
+.vpick { display: grid; place-items: center; width: 40px; flex: none; }
+.vpick input { width: 22px; height: 22px; accent-color: var(--red); }
+.pick-head { justify-content: space-between; margin: 0 2px 8px; min-height: 36px; }
+.bulkbar { position: sticky; bottom: calc(76px + var(--safe-b, 0px)); z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding: 10px 12px; border-radius: 16px; background: var(--card); border: 1px solid var(--border-strong); box-shadow: 0 6px 24px rgba(0, 0, 0, .12); }
+@media (min-width: 1025px) { .bulkbar { bottom: 12px; } }
+.danger-zone { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid rgba(198, 40, 40, .25); border-radius: 14px; background: #FFF9F9; }
+.danger-zone > div { display: flex; flex-direction: column; gap: 2px; }
+.danger-zone strong { color: var(--red); font-size: 14.5px; }
+.danger-zone span { font-size: 13px; color: var(--ink-2); line-height: 1.45; }
+.danger-zone .btn { flex: none; }
+.del-what { margin: 12px 0 6px; }
+.del-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; font-size: 14px; }
+.del-list li { display: flex; gap: 8px; align-items: flex-start; }
+.del-list .icon { margin-top: 2px; color: var(--red); }
+.del-progress { display: flex; flex-direction: column; gap: 10px; }
+.del-progress__row { display: flex; gap: 10px; align-items: flex-start; }
+.del-progress__row > span:last-child { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.del-progress__icon { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--bg-sunken); color: var(--ink-3); }
+.del-progress__row--done .del-progress__icon { background: var(--green-soft); color: var(--green); }
+.del-progress__row--partial .del-progress__icon, .del-progress__row--refused .del-progress__icon { background: var(--red-soft); color: var(--red); }
+.del-progress__row--working .del-progress__icon .icon { animation: delspin 1s linear infinite; }
+@keyframes delspin { to { transform: rotate(360deg); } }

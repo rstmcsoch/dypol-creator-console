@@ -120,7 +120,7 @@ export async function onRequestPost(context) {
     });
   }
   const run = { id: dispatched.runRowId };
-  await addActivity(db, { icon: 'run', tone: 'blue', title: 'Run started', sub: `${job.title} · ${engine}` });
+  await addActivity(db, { icon: 'run', tone: 'blue', title: 'Run started', sub: `${job.title} · ${engine}`, jobId: job.id });
 
   return json(null, 202, {
     ok: true, jobId: job.id, runId: run.id, ghRunId: dispatched.ghRunId || null,

@@ -22,6 +22,7 @@ import {
 import { buildQuality } from './safeguards.js';
 import { splitRepo, getWorkflowRun, listRunJobs } from './github.js';
 import { maybeDispatchFallback } from './fallback.js';
+import { isDeleting } from './deletejob.js';
 import { failJob, ingestPublishResult } from './jobflow.js';
 
 /* The only repositories whose events are accepted. Settings may override the
@@ -211,12 +212,20 @@ export const PROGRESS_SCHEMA = [
     id TEXT PRIMARY KEY, event TEXT, received_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS login_throttle (
     key_hash TEXT PRIMARY KEY, attempts TEXT NOT NULL, updated_at INTEGER NOT NULL)`,
+  // Delete video (31 Oct 2026): in-flight deletions (lock + plan, no titles)
+  // and a content-free counter so deleting never frees today's upload slot.
+  `CREATE TABLE IF NOT EXISTS deletions (
+    job_id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'active', plan TEXT, done TEXT,
+    lease_owner TEXT, lease_exp INTEGER, last_error TEXT, created_at INTEGER, updated_at INTEGER)`,
+  `CREATE TABLE IF NOT EXISTS cap_ledger (
+    day TEXT PRIMARY KEY, deleted_published INTEGER NOT NULL DEFAULT 0)`,
   // Pre-fix builds stored raw client IPs as settings rows — drop them.
   "DELETE FROM settings WHERE key LIKE 'throttle:%'",
 ];
 const ADD_COLUMNS = {
   runs: [['conclusion', 'TEXT'], ['current_step', 'TEXT'], ['completed_at', 'TEXT'], ['updated_at', 'TEXT'],
     ['phase', 'TEXT'], ['inputs', 'TEXT']],
+  activity: [['job_id', 'TEXT']],
   jobs: [['current_step', 'TEXT'], ['publish_run_id', 'TEXT'], ['uploading_since', 'INTEGER'],
     ['review_note', 'TEXT'], ['videos', 'TEXT'], ['error_log', 'TEXT'], ['retry_count', 'INTEGER']],
 };
@@ -353,6 +362,7 @@ async function applyToJob(db, env, settings, local, status, { failure, currentSt
   if (!local?.jobId) return null;
   const job = await getJob(db, local.jobId);
   if (!job) return null;
+  if (await isDeleting(db, job.id)) return null; // Delete video in progress: leave it alone
   if (isPublishRun(local, job)) {
     return applyPublish(db, env, settings, local, job, status, { failure, currentStep, completedAt, ghJobId });
   }
@@ -380,7 +390,7 @@ async function applyToJob(db, env, settings, local, status, { failure, currentSt
       }),
     });
     await appendLog(db, await getJob(db, job.id), { ts: logTs(), level: 'ok', msg: 'GitHub Actions run succeeded (webhook) — ready for review' });
-    await addActivity(db, { icon: 'check', tone: 'violet', title: 'Video ready for review', sub: job.title });
+    await addActivity(db, { icon: 'check', tone: 'violet', title: 'Video ready for review', sub: job.title, jobId: job.id });
     return 'needs-review';
   }
   if (status === 'failed') {
@@ -424,6 +434,12 @@ export async function handleWorkflowRun(db, env, settings, engine, ghr, { repo }
   const workflow = settings.github?.[engine]?.workflow || (ghr.path ? ghr.path.split('/').pop() : 'workflow');
 
   if (!local) {
+    // A run named "<job_id> (<phase>)" whose job no longer exists (deleted) or
+    // is being deleted must not recreate a row.
+    const named = /^(job-[a-z0-9]+-[a-z0-9]+) \(/.exec(String(ghr.displayTitle || ''));
+    if (named && (!(await getJob(db, named[1])) || await isDeleting(db, named[1]))) {
+      return { linked: false, by: null, runRecord: null, status, job: null, ignored: 'deleted-job' };
+    }
     local = {
       id: `run-gh-${ghr.runId}`, runId: ghr.runId, engine, workflow, jobId: null,
       startedAt: ghr.startedAt || nowIso(), durationSec: null, status, failureReason: null,

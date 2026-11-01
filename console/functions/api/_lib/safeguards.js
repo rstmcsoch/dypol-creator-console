@@ -28,6 +28,15 @@ export async function findDuplicate(db, title, exclude = null) {
       return { key, norm, job: j, exact: false };
     }
   }
+  // A published video deleted from the dashboard leaves only its YouTube id +
+  // this topic hash in uploads (no title, no job id): the topic stays blocked.
+  try {
+    const kept = await db.prepare('SELECT youtube_id FROM uploads WHERE job_id IS NULL AND topic_key = ? LIMIT 1').bind(key).first();
+    if (kept?.youtube_id) {
+      return { key, norm, exact: true, deleted: true,
+        job: { id: null, title: 'a deleted video that is still on YouTube', status: 'published', youtubeUrl: `https://youtu.be/${kept.youtube_id}` } };
+    }
+  } catch { /* uploads table missing in a bare test DB */ }
   return null;
 }
 
@@ -209,7 +218,7 @@ export async function recordPublished(db, job, youtubeId, extra = {}) {
     ...(extra.publishRunId ? { publishRunId: String(extra.publishRunId) } : {}),
   });
   const extraIds = (extra.videos || []).filter((v) => v.youtube_id && v.youtube_id !== youtubeId);
-  await addActivity(db, { icon: 'upload', tone: 'green', title: 'Video uploaded', sub: job.title });
+  await addActivity(db, { icon: 'upload', tone: 'green', title: 'Video uploaded', sub: job.title, jobId: job.id });
   return extraIds;
 }
 
