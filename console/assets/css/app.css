@@ -1219,3 +1219,75 @@ details.adv > summary > .muted::first-letter { text-transform: uppercase; }
 .del-progress__row--partial .del-progress__icon, .del-progress__row--refused .del-progress__icon { background: var(--red-soft); color: var(--red); }
 .del-progress__row--working .del-progress__icon .icon { animation: delspin 1s linear infinite; }
 @keyframes delspin { to { transform: rotate(360deg); } }
+
+/* ============================================================
+   Theme toggle + dark mode
+   Light is the default palette above; dark overrides tokens and the few
+   hard-coded light surfaces. theme.js sets <html data-theme>.
+   ============================================================ */
+.theme-toggle { position: relative; flex: none; }
+.theme-toggle:focus-visible { outline: none; box-shadow: var(--ring); }
+.theme-toggle .theme-toggle__sun { display: none; }
+[data-theme="dark"] .theme-toggle .theme-toggle__sun { display: block; }
+[data-theme="dark"] .theme-toggle .theme-toggle__moon { display: none; }
+.theme-toggle--float { position: fixed; top: calc(14px + env(safe-area-inset-top, 0px)); right: 14px; z-index: 90; width: 44px; height: 44px; border-radius: 50%; box-shadow: var(--shadow-sm); }
+@media (max-width: 720px) { .topbar .theme-toggle { width: 40px; height: 40px; } }
+@media (pointer: coarse) { .theme-toggle { min-width: 44px; min-height: 44px; } }
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --accent-soft: #3A2412;
+  --accent-border: #6B3A12;
+  --accent-ink: #FFC08A;
+  --accent-700: #FF9A45;
+
+  --ink: #E8EAEE;
+  --ink-2: #B3BAC6;
+  --ink-3: #8790A0;
+  --ink-4: #5E6675;
+  --bg: #121418;
+  --bg-sunken: #0D0F12;
+  --card: #1B1E24;
+  --border: #2B2F37;
+  --border-strong: #3A3F49;
+  --row-hover: #22262D;
+
+  --sidebar: #0E1013;
+  --sidebar-2: #181B20;
+
+  --green: #4ADE80;   --green-soft: #12301F;
+  --blue: #7AA7FF;    --blue-soft: #16233F;
+  --amber: #FBBF24;   --amber-soft: #33270E;
+  --red: #F87171;     --red-soft: #3A1717;
+  --violet: #A78BFA;  --violet-soft: #251D44;
+  --teal: #2DD4BF;    --teal-soft: #0F2E2B;
+  --gray-soft: #262A31;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, .45);
+  --shadow-lg: 0 18px 48px rgba(0, 0, 0, .6);
+}
+[data-theme="dark"] .topbar { background: rgba(18, 20, 24, .88); }
+@media (max-width: 720px) {
+  [data-theme="dark"] .tabbar { background: rgba(22, 24, 29, .97); box-shadow: 0 -4px 18px rgba(0, 0, 0, .4); }
+}
+[data-theme="dark"] .chip__count { background: rgba(255, 255, 255, .08); }
+[data-theme="dark"] .chart .grid-line { stroke: #2B2F37; }
+[data-theme="dark"] .qc__row .pill { background: rgba(255, 255, 255, .08); }
+[data-theme="dark"] .attn--amber { background: #2A2110; border-color: #5A4415; }
+[data-theme="dark"] .attn--red { background: #2C1414; border-color: #5C2222; }
+[data-theme="dark"] .danger-zone { background: #241313; border-color: rgba(248, 113, 113, .3); }
+[data-theme="dark"] .btn--danger:hover:not(:disabled) { background: #4A1C1C; }
+[data-theme="dark"] .login { background:
+    radial-gradient(1100px 500px at 85% -10%, rgba(255, 113, 0, .10), transparent 60%),
+    radial-gradient(900px 480px at -10% 110%, rgba(109, 74, 255, .10), transparent 55%),
+    var(--bg); }
+[data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), [data-theme="dark"] select, [data-theme="dark"] textarea { background-color: var(--bg-sunken); color: var(--ink); border-color: var(--border); }
+[data-theme="dark"] ::placeholder { color: var(--ink-4); }
+html { transition: none; }
+body, .card, .topbar, .tabbar, .icon-btn { transition: background-color .2s ease, color .2s ease, border-color .2s ease; }
+@media (prefers-reduced-motion: reduce) { body, .card, .topbar, .tabbar, .icon-btn { transition: none; } }
+[data-theme="dark"] .avatar { background: #3A3F49; color: #fff; }
+[data-theme="dark"] .btn--danger { background: transparent; border-color: rgba(248, 113, 113, .4); }
+[data-theme="dark"] .tab__badge, [data-theme="dark"] .tab__fab { border-color: var(--card); }
+[data-theme="dark"] .toast, [data-theme="dark"] .step__n { background: #2E333C; color: #fff; }
