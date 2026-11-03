@@ -1295,7 +1295,7 @@ body, .card, .topbar, .tabbar, .icon-btn { transition: background-color .2s ease
 /* ---------- Review player (assets/js/player.js) — light, mobile-first ---------- */
 .rp-skel { aspect-ratio: 16 / 9; background: #0b0d10; border-radius: 14px; display: grid; place-items: center; color: #9aa3b2; }
 .rp-skel--short { aspect-ratio: 9 / 16; height: min(62vh, 640px); width: auto; max-width: 100%; margin: 0 auto; }
-.rp { outline: none; display: flex; flex-direction: column; gap: 6px; }
+.rp { outline: none; display: flex; flex-direction: column; gap: 6px; container-type: inline-size; min-width: 0; }
 .rp [hidden] { display: none !important; }
 .rp:focus-visible .rp__stage { box-shadow: var(--ring); }
 .rp__tabs { display: flex; gap: 6px; }
@@ -1334,8 +1334,8 @@ body, .card, .topbar, .tabbar, .icon-btn { transition: background-color .2s ease
   background: #111; border-radius: 8px; box-shadow: var(--shadow-md); pointer-events: none; z-index: 2; }
 .rp__thumb-img { background-repeat: no-repeat; border-radius: 5px; background-color: #222; }
 .rp__thumb-t { color: #fff; font: 600 12px/1.2 var(--mono); padding: 0 4px; }
-.rp__ctl { display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; }
-.rp__btn { min-width: 40px; height: 40px; border: 0; background: transparent; border-radius: 10px; color: var(--ink); font-weight: 700;
+.rp__ctl { display: flex; align-items: center; gap: 0; flex-wrap: wrap; row-gap: 2px; min-width: 0; }
+.rp__btn { flex: none; min-width: 40px; height: 40px; border: 0; background: transparent; border-radius: 10px; color: var(--ink); font-weight: 700;
   display: inline-grid; place-items: center; padding: 0 6px; font-size: 14px; }
 .rp__btn:active { background: var(--gray-soft); }
 .rp__btn[aria-pressed="true"] { color: var(--accent-700); background: var(--accent-soft); }
@@ -1359,10 +1359,15 @@ body, .card, .topbar, .tabbar, .icon-btn { transition: background-color .2s ease
 .rp__note-t { border: 0; background: var(--card); border-radius: 8px; font: 600 12px var(--mono); padding: 4px 8px; color: var(--blue); white-space: nowrap; }
 .rp__note-x { border: 0; background: transparent; font-size: 18px; width: 30px; height: 30px; color: var(--ink-3); }
 .rp__hint { line-height: 1.35; }
-@media (max-width: 420px) {
-  .rp__opt { display: none; }       /* frame-step stays on the keyboard (, .) on very small phones */
-  .rp__btn { min-width: 36px; padding: 0 4px; }
-  .rp__time { font-size: 12px; }
+/* Sized by the player's own width (the check sheet is narrow on every screen). */
+@container (max-width: 520px) {
+  .rp__btn { min-width: 34px; height: 40px; padding: 0 3px; }
+  .rp__btn svg { width: 20px; height: 20px; }
+  .rp__time { font-size: 12px; padding-left: 2px; }
+  .rp__speed { min-width: 40px; }
+}
+@container (max-width: 400px) {
+  .rp__opt { display: none; }       /* frame-step stays on the keyboard (, and .) */
 }
 @media (hover: hover) { .rp__btn:hover { background: var(--gray-soft); } }
 :fullscreen.rp { background: #000; justify-content: center; padding: 8px; }

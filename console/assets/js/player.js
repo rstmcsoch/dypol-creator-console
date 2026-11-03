@@ -156,7 +156,10 @@ export function mountPlayer(el, { jobId, media, info, engine }) {
   function hint() {
     const m = meta();
     const src = info?.source === 'r2' ? (st.full ? `Original ${m.w || ''}×${m.h || ''}` : `Review copy ${m.preview?.w || ''}×${m.preview?.h || ''}`) : (st.full ? 'Full-quality file' : 'Small preview');
-    $('.rp__hint').textContent = `${src} · tap left/right to skip 5 s · keys: Space, ←/→, J/L, , . , C, M, F, N, Q`;
+    const touch = typeof matchMedia === 'function' && matchMedia('(hover: none)').matches;
+    $('.rp__hint').textContent = touch
+      ? `${src} · tap the left / right side of the picture to skip 5 s`
+      : `${src} · keys: Space play · ←/→ 5 s · J/L 10 s · comma/period one frame · C captions · M mute · F full screen · N note · Q next warning`;
   }
 
   function load(keepTime) {
@@ -178,8 +181,15 @@ export function mountPlayer(el, { jobId, media, info, engine }) {
     const dl = $('[data-role="download"]');
     dl.href = media(st.which === main ? 'video' : 'short', '&quality=full&download=1');
     root.classList.toggle('rp--short', st.which === 'short');
-    if (keepTime) {
-      v.addEventListener('loadedmetadata', () => { v.currentTime = Math.min(t, dur() || t); if (wasPlaying) v.play().catch(() => {}); }, { once: true });
+    if (keepTime && t > 0) {
+      // Resume at the same moment; retry once the file can play (some sources report seekable late).
+      const resume = () => {
+        try { v.currentTime = Math.min(t, (dur() || t) - 0.05); } catch { /* not seekable yet */ }
+        if (wasPlaying) v.play().catch(() => {});
+        paint();
+      };
+      v.addEventListener('loadedmetadata', resume, { once: true });
+      v.addEventListener('canplay', () => { if (Math.abs(v.currentTime - t) > 1) resume(); }, { once: true });
     }
     v.load();
     marks(); chapters(); hint();
@@ -384,7 +394,8 @@ export function mountPlayer(el, { jobId, media, info, engine }) {
     if (!st.dragging) return;
     st.dragging = false;
     seek(tAt(e.clientX));
-    thumb.hidden = true;
+    clearTimeout(thumb._t);
+    thumb._t = setTimeout(() => { if (!st.dragging) thumb.hidden = true; }, 700); // let a finger see where it landed
   };
   track.addEventListener('pointerup', endDrag);
   track.addEventListener('pointercancel', () => { st.dragging = false; thumb.hidden = true; });
