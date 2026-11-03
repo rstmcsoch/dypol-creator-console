@@ -192,6 +192,10 @@ async function refresh() {
     ${group('status', 'server', 'System status', 'limits, storage and connections', `
       ${quotaPanelShell('quota-panel-settings')}
       <div class="card" style="margin-top:12px">
+        <div class="card__head">${icon('server')}<h2>Video storage</h2></div>
+        <div class="card__body"><div class="small" id="storage-line" aria-live="polite">Checking video storage…</div></div>
+      </div>
+      <div class="card" style="margin-top:12px">
         <div class="card__head">${icon('server')}<h2>Connections</h2></div>
         <div class="card__body qc">
           ${[
@@ -326,8 +330,24 @@ async function refresh() {
   root.querySelector('#btn-test-dedupe').onclick = () => testTarget('dedupe', 'Repeat-topic check');
   const st = root.querySelector('#status');
   if (openWhich) root.querySelector(`#${openWhich === 'status' ? 'status' : `adv-${openWhich}`}`)?.scrollIntoView({ block: 'start' });
-  if (st.open) mountQuotaPanel(root, 'quota-panel-settings');
-  else st.addEventListener('toggle', () => { if (st.open) mountQuotaPanel(root, 'quota-panel-settings'); }, { once: true });
+  const openStatus = () => { mountQuotaPanel(root, 'quota-panel-settings'); loadStorage(root); };
+  if (st.open) openStatus();
+  else st.addEventListener('toggle', () => { if (st.open) openStatus(); }, { once: true });
+}
+
+const gb = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${Math.max(0, Math.round((b || 0) / 1e6))} MB`);
+/** One plain line: used of free, drafts vs published, expiry rule. */
+export function storageText(u) {
+  if (!u || u.configured === false) return 'Video storage isn’t connected — previews come from GitHub (kept 3 days).';
+  if (u.error) return u.error;
+  const pct = u.limitBytes ? Math.min(100, Math.round((u.bytes / u.limitBytes) * 100)) : 0;
+  return `${gb(u.bytes)} of ${gb(u.limitBytes)} free storage used (${pct}%) · ${u.drafts?.jobs || 0} draft${u.drafts?.jobs === 1 ? '' : 's'} (${gb(u.drafts?.bytes)}), `
+    + `${u.published?.jobs || 0} published (${gb(u.published?.bytes)}) · drafts are removed after ${u.draftsExpireDays || 30} days; published videos are kept.`;
+}
+async function loadStorage(root) {
+  const el = root.querySelector('#storage-line');
+  if (!el) return;
+  try { el.textContent = storageText(await api.get('/api/storage')); } catch { el.textContent = 'Video storage couldn’t be checked right now.'; }
 }
 
 const fmtDay = (t) => { const d = new Date(t); return Number.isNaN(d.getTime()) ? String(t || '') : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }); };

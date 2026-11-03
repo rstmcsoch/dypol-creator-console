@@ -10,6 +10,7 @@
  */
 import { json } from '../_lib/util.js';
 import { verifySignature, processEvent } from '../_lib/webhook.js';
+import { sweepPublished, hasR2 } from '../_lib/r2.js';
 
 const MAX_BODY = 2 * 1024 * 1024; // GitHub caps payloads at 25 MB; ours are small.
 
@@ -31,6 +32,10 @@ export async function onRequestPost(context) {
   }
   try {
     const { status, body } = await processEvent(env.DB, env, event, payload, delivery);
+    // Keep published videos out of the 30-day drafts/ expiry (moved to published/ in R2).
+    if (hasR2(env) && event === 'workflow_run' && payload?.action === 'completed' && typeof context.waitUntil === 'function') {
+      context.waitUntil(sweepPublished(env, env.DB).catch(() => {}));
+    }
     return json(null, status, body);
   } catch (err) {
     // 500 lets GitHub show the failure in Recent Deliveries (redeliverable).

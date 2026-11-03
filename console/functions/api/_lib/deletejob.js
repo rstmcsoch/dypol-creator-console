@@ -14,7 +14,14 @@
  *   3. one commit per engine repo (Git Data API) removing the job's files
  *      (+ its content_plan.json entry, + images/demo.gif if this job wrote it)
  *   4. re-sweep GitHub for runs that started after the plan was made
- *   5. one atomic D1 batch deleting every row (+ the deletions row)
+ *   5. the job's stored files in Cloudflare R2 (drafts/<id>/ + published/<id>/)
+ *   6. one atomic D1 batch deleting every row (+ the deletions row)
+ *
+ * Linked versions (Redo / fallback children, e.g. a Short-only version made
+ * from a long video) are listed on the confirm sheet and deleted ONLY when the
+ * owner ticks them (`include`); nothing linked is deleted by default (owner's
+ * decision after the 1 Nov 2026 incident). Kept versions are detached
+ * (parent_job_id cleared) so they stay complete videos.
  * D1 rows go last, so the job row itself is the tombstone until everything
  * else is gone. 404/410 from GitHub = already gone, so every step is idempotent.
  *
@@ -23,6 +30,7 @@
  */
 import { splitRepo, integrationRef } from './github.js';
 import { getJob, utcDayStartIso } from './db.js';
+import { deleteJobObjects, countJobObjects, hasR2 } from './r2.js';
 
 const API = 'https://api.github.com';
 export const DELETE_BUDGET = 35;
@@ -91,6 +99,26 @@ const refusal = (r) => (r.status === 403 ? 'GitHub refused (the console token la
   : `GitHub answered ${r.status}${r.data?.message ? ` (${String(r.data.message).slice(0, 120)})` : ''}`);
 
 /* ---------------- lineage + discovery ---------------- */
+
+/**
+ * Linked versions of a job (all descendants: Redo / fallback children), for the
+ * confirm sheet: id, engine, title, status. Never ancestors.
+ */
+export async function linkedVersions(db, rootId) {
+  const all = await lineageJobs(db, rootId);
+  return all.slice(1).map((j) => ({
+    id: j.id, engine: j.engine, title: j.title || j.topic || '', status: j.status, parentJobId: j.parentJobId || null,
+    onYouTube: !!(j.youtubeId || (j.videos || []).some((v) => v?.youtube_id)), createdAt: j.createdAt,
+  }));
+}
+
+/** The job plus only the linked versions the owner ticked (include). */
+export async function selectedJobs(db, rootId, include = []) {
+  const all = await lineageJobs(db, rootId);
+  if (!all.length) return [];
+  const want = new Set((Array.isArray(include) ? include : []).map(String));
+  return [all[0], ...all.slice(1).filter((j) => want.has(j.id))];
+}
 
 /** The job plus all descendants (Redo / fallback children), never ancestors. */
 export async function lineageJobs(db, rootId) {
@@ -163,8 +191,8 @@ const planEntryMatches = (e, set) => e && (set.has(norm(e.title)) || set.has(nor
  * Work out everything a deletion has to remove. Read-only.
  * Plan holds ids, paths and counts — never titles or descriptions.
  */
-export async function buildPlan(db, env, settings, rootId, budget = new GhBudget()) {
-  const jobs = await lineageJobs(db, rootId);
+export async function buildPlan(db, env, settings, rootId, budget = new GhBudget(), { include = [] } = {}) {
+  const jobs = await selectedJobs(db, rootId, include);
   if (!jobs.length) return null;
   const token = env.GITHUB_TOKEN;
   const ref = integrationRef(settings);
@@ -257,6 +285,8 @@ export async function buildPlan(db, env, settings, rootId, budget = new GhBudget
     .bind(...ids, ...runList, ...runList, ...runList, ...ids).first().catch(() => ({}));
 
   const published = jobs.filter((j) => j.status === 'published' || j.youtubeId);
+  let storedFiles = 0;
+  if (hasR2(env)) { try { storedFiles = await countJobObjects(env, ids); } catch { notes.push('video storage unreadable'); } }
   const plan = {
     v: 1,
     rootId,
@@ -279,6 +309,7 @@ export async function buildPlan(db, env, settings, rootId, budget = new GhBudget
       dashboardRows: jobs.length + Number(c?.runs || 0) + Number(c?.gh_jobs || 0) + Number(c?.steps || 0) + Number(c?.uploads || 0),
       youtubeStays: published.reduce((n, j) => n + ((j.videos || []).filter((v) => v?.youtube_id).length || 1), 0),
       beingMade: jobs.filter((j) => ACTIVE.includes(j.status)).length,
+      storedFiles,
     },
     notes,
   };
@@ -293,6 +324,7 @@ export function describePlan(plan) {
   if (c.githubRuns) items.push(s(c.githubRuns, 'GitHub run (with its log)', 'GitHub runs (with their logs)'));
   if (c.savedFiles) items.push(s(c.savedFiles, 'saved file on GitHub', 'saved files on GitHub'));
   if (c.repoFiles) items.push(s(c.repoFiles, 'file in the code repository', 'files in the code repository'));
+  if (c.storedFiles) items.push(s(c.storedFiles, 'stored video file', 'stored video files'));
   return items;
 }
 
@@ -504,6 +536,8 @@ export async function finalStatements(db, plan, { now = Date.now() } = {}) {
   }
   // Other jobs that cite one of these as their duplicate (stores title + id).
   for (const id of ids) st.push(db.prepare('UPDATE jobs SET duplicate_of = NULL WHERE instr(COALESCE(duplicate_of, \'\'), ?) > 0').bind(`"${id}"`));
+  // Linked versions the owner did NOT tick stay: detach them from the deleted job.
+  inList('parent_job_id', ids, 'UPDATE jobs SET parent_job_id = NULL WHERE $IN');
   // Cached quota panel holds the last upload's title — drop it (recomputed).
   st.push(db.prepare("DELETE FROM quota_cache WHERE key <> 'lock'"));
   // Today's upload cap counts uploads, not existing videos: keep the slot used.
@@ -523,7 +557,7 @@ export async function finalStatements(db, plan, { now = Date.now() } = {}) {
  *   {state:'done'} | {state:'continue'|'waiting', retryAfterMs} | {state:'partial', remaining, errors}
  *   | {state:'busy'} (another tab holds the lease) | {state:'refused', error}
  */
-export async function runDeletion(db, env, settings, jobId, { owner = Math.random().toString(36).slice(2), now = Date.now() } = {}) {
+export async function runDeletion(db, env, settings, jobId, { owner = Math.random().toString(36).slice(2), now = Date.now(), include = [] } = {}) {
   const budget = new GhBudget();
   const results = [];
   let d = await loadDeletion(db, jobId);
@@ -542,7 +576,7 @@ export async function runDeletion(db, env, settings, jobId, { owner = Math.rando
       try { if ((JSON.parse(o.plan).jobs || []).some((j) => j.id === jobId)) return runDeletion(db, env, settings, o.job_id, { owner, now }); } catch { /* ignore */ }
     }
     let plan;
-    try { plan = await buildPlan(db, env, settings, jobId, budget); } catch (e) {
+    try { plan = await buildPlan(db, env, settings, jobId, budget, { include }); } catch (e) {
       if (e.pause) return { state: 'continue', retryAfterMs: e.retryAfterMs || 2000, results, note: 'GitHub busy — trying again' };
       throw e;
     }
@@ -586,6 +620,18 @@ export async function runDeletion(db, env, settings, jobId, { owner = Math.rando
         d = await saveDeletion(db, d, { state: 'active' });
         await release();
         return { state: 'continue', retryAfterMs: 500, results, remaining: remainingOf(d) };
+      }
+    }
+    // Stored files in Cloudflare R2 (drafts/ + published/) of every deleted job.
+    if (hasR2(env) && d.done?.r2 !== 'done') {
+      try {
+        const n = await deleteJobObjects(env, d.plan.jobs.map((j) => j.id));
+        d.done.r2 = 'done';
+        if (n) results.push({ item: `${n} stored video file${n === 1 ? '' : 's'}`, ok: true, note: 'removed' });
+      } catch (e) {
+        d = await saveDeletion(db, d, { state: 'partial', last_error: `Video storage: ${String(e.message || e).slice(0, 200)}` });
+        await release();
+        return { state: 'partial', results, errors: [`Video storage: ${String(e.message || e).slice(0, 120)}`], remaining: remainingOf(d) };
       }
     }
     const statements = await finalStatements(db, d.plan, { now });

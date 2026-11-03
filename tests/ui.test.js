@@ -99,7 +99,7 @@ test('safeguards stay wired: approve confirms first, reject needs a reason, publ
   assert.match(approve, /confirmModal\('Publish to YouTube\?'/);
   assert.match(approve, /if \(!await confirmModal/);
   assert.match(q, /if \(!optional && v\.length < 3\)/, 'reject reason (≥3 chars) still required');
-  assert.match(q, /reasonSheet\(\{ title: 'Reject this video\?'[^}]*danger: true \}\)/);
+  assert.match(q, /reasonSheet\(\{ title: 'Reject this video\?'[\s\S]{0,400}?danger: true, prefill: notesText \}\)/);
   assert.match(q, /Publish now\?/);
   assert.match(q, /Try the upload again\?/);
   assert.match(q, /b\.disabled = true; \/\/ double-submission guard/);

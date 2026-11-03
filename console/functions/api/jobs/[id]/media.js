@@ -3,9 +3,20 @@ import { getJob, getSettings, listRuns } from '../../_lib/db.js';
 import { splitRepo, listRunArtifacts, downloadArtifact, artifactBlobUrl } from '../../_lib/github.js';
 import { listEntries, extractNamed } from '../../_lib/ziputil.js';
 import { openRemoteZip, streamEntry, RangeUnsupported } from '../../_lib/remotezip.js';
+import { r2Manifest, pickR2File, keyFor, streamR2 } from '../../_lib/r2.js';
 
 /**
- * GET /api/jobs/:id/media?kind=video|short|thumb|manifest|list[&quality=preview|full][&download=1]
+ * GET /api/jobs/:id/media?kind=video|short|thumb|manifest|list|info|sprite|captions
+ *                          [&quality=preview|full][&download=1][&video=long|short]
+ *
+ * 1. Cloudflare R2 first (binding MEDIA, private bucket, behind the console login):
+ *    drafts/<job_id>/ (or published/<job_id>/) written by the engines. video/short
+ *    stream the compressed review copy (CRF 28, 1 s keyframes, +faststart) with
+ *    HTTP Range (206) so the player seeks without downloading the file;
+ *    quality=full streams the ORIGINAL render. kind=info returns the player data
+ *    (sizes, thumbnail strips, chapters, QC warning times, captions); sprite and
+ *    captions return the strip image and the WebVTT track.
+ * 2. Fallback when the job is not in R2: the GitHub artifacts (below).
  *
  * Review happens inside the console (no GitHub visit needed):
  *  - video / short prefer the small "preview-<job_id>" artifact (480p/720p H.264,
@@ -90,6 +101,26 @@ export async function onRequestGet(context) {
   const download = params.get('download') === '1';
   const job = await getJob(db, context.params.id);
   if (!job) return json(null, 404, { error: 'Job not found.', code: 'not-found' });
+
+  // ---- 1. Cloudflare R2 ----
+  const manifest = await r2Manifest(context.env, job.id);
+  if (kind === 'info') return json(null, 200, playerInfo(job, manifest));
+  if (manifest) {
+    let name = pickR2File(manifest, job.engine, kind, quality);
+    const which = params.get('video') === 'short' ? 'short' : params.get('video') === 'long' ? 'long' : null;
+    if (kind === 'sprite') name = manifest.files?.[`${which || mainOf(job, manifest)}_sprite`] ? `${which || mainOf(job, manifest)}_sprite` : null;
+    if (kind === 'captions') name = manifest.files?.[`${which || mainOf(job, manifest)}_captions`] ? `${which || mainOf(job, manifest)}_captions` : null;
+    const key = name && keyFor(manifest, name);
+    if (key) {
+      const isOriginal = name === 'long' || name === 'short';
+      const res = await streamR2(context.env, key, context.request, {
+        download, source: isOriginal ? 'r2-original' : 'r2',
+        filename: `${job.id}-${name}.${key.split('.').pop()}`,
+      });
+      if (res) return res;
+    }
+  }
+  if (kind === 'sprite' || kind === 'captions') return json(null, 404, { error: `No ${kind} stored for this video.`, code: 'no-media' });
   const settings = await getSettings(db);
   const slug = settings.github[job.engine]?.repo;
   const runId = job.runId || (await listRuns(db)).find((r) => r.jobId === job.id && r.runId)?.runId;
@@ -142,4 +173,27 @@ export async function onRequestGet(context) {
     return new Response(entry.bytes, { headers });
   }
   return json(null, 404, { error: `No ${kind} found in this run's artifacts.`, code: 'no-media' });
+}
+
+const mainOf = (job, manifest) => (job.engine === 'verticals' || (!manifest?.files?.long && manifest?.files?.short) ? 'short' : 'long');
+
+/** Player data for kind=info (no keys or bucket names leave the server). */
+export function playerInfo(job, manifest) {
+  if (!manifest) return { source: 'artifacts', engine: job.engine, main: job.engine === 'verticals' ? 'short' : 'long' };
+  const f = manifest.files || {};
+  const videos = {};
+  for (const k of ['long', 'short']) {
+    if (!f[k]) continue;
+    const pv = f[`${k}_preview`];
+    videos[k] = {
+      w: f[k].w, h: f[k].h, duration: f[k].duration, fps: f[k].fps || 30, size: f[k].size,
+      preview: pv ? { w: pv.w, h: pv.h, size: pv.size } : null,
+      captions: !!f[`${k}_captions`],
+      sprite: manifest.sprites?.[k] ? (({ interval, count, cols, rows, tw, th }) => ({ interval, count, cols, rows, tw, th }))(manifest.sprites[k]) : null,
+      chapters: (manifest.chapters?.[k] || []).slice(0, 60),
+      markers: (manifest.markers?.[k] || []).slice(0, 100),
+      resolution: manifest.resolution?.[k] || null,
+    };
+  }
+  return { source: 'r2', engine: job.engine, main: mainOf(job, manifest), videos, stored: manifest.prefix?.startsWith('published/') ? 'published' : 'draft' };
 }

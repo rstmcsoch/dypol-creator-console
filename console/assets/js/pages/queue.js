@@ -13,6 +13,7 @@ import {
 } from '../ui.js';
 import { mountProgress, progressLine, fetchProgress } from '../progress.js';
 import { deleteVideos, runDeletes } from '../delete.js';
+import { mountPlayer, getNotes, notesToReason } from '../player.js';
 
 // Every job state belongs to exactly one chip, so the chips add up to "All".
 const STATUS_TABS = [
@@ -158,13 +159,8 @@ function detailDrawer(j) {
     ${j.deletion ? `<div class="state state--red">${icon('alert')}<div><strong>${j.deletion.running ? 'Being deleted…' : 'Deletion not finished'}</strong>
       <span>Some parts couldn’t be removed yet${j.deletion.remaining?.githubRuns ? ` (${j.deletion.remaining.githubRuns} GitHub run${j.deletion.remaining.githubRuns === 1 ? '' : 's'} left)` : ''}. Nothing was touched on YouTube.</span>
       <button class="btn btn--danger-solid btn--sm" id="btn-retry-delete" style="margin-top:8px;align-self:flex-start">${icon('refresh', 'icon--sm')} Retry delete</button></div></div>` : stateBanner(j, retriesLeft)}
-    ${hasRun ? `<div class="media-review">
-      <video controls preload="metadata" playsinline class="player ${j.format === 'short' ? 'player--short' : ''}" src="${media('video')}"></video>
-      <div class="row row--wrap" style="gap:8px;margin-top:8px">
-        ${j.engine === 'gemini' ? `<a class="btn btn--secondary btn--sm" href="${media('short')}" target="_blank" rel="noopener">${icon('play', 'icon--sm')} Watch the Short</a>` : ''}
-        <a class="btn btn--ghost btn--sm" href="${media('video', '&quality=full&download=1')}" rel="noopener">${icon('external', 'icon--sm')} Full-quality file</a>
-      </div>
-      <div class="tiny muted" style="margin-top:4px">This player shows a small preview. Open the full-quality file if detail matters.</div>
+    ${hasRun ? `<div class="media-review" id="review-player" data-job="${esc(j.id)}">
+      <div class="rp-skel ${j.format === 'short' ? 'rp-skel--short' : ''}"><span class="tiny muted">Loading the player…</span></div>
     </div>` : `<div class="player-ph">${thumb(j, true)}<div class="tiny muted">${j.demo ? 'Demo video — no real preview.' : 'The preview appears here when the video is ready.'}</div></div>`}
     ${j.demo ? '' : '<div id="job-progress" aria-live="polite"></div>'}
 
@@ -266,6 +262,15 @@ function detailDrawer(j) {
       refresh().catch(() => {});
     },
   });
+  const playerBox = document.getElementById('review-player');
+  if (playerBox) {
+    fetch(media('info'), { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null)
+      .then((info) => {
+        if (!document.body.contains(playerBox)) return;
+        mountPlayer(playerBox, { jobId: j.id, media, info, engine: j.engine });
+      });
+  }
   const credits = document.getElementById('visual-credits');
   if (credits) {
     fetch(`/api/jobs/${encodeURIComponent(j.id)}/media?kind=manifest`, { credentials: 'same-origin' })
@@ -336,7 +341,8 @@ function detailDrawer(j) {
     const action = b.dataset.jact;
     let payload = {};
     if (action === 'reject') {
-      const reason = await reasonSheet({ title: 'Reject this video?', intro: 'It will not be published. Your reason is saved and used as feedback if you tap Redo later.', okLabel: 'Reject video', danger: true });
+      const notesText = notesToReason(getNotes(j.id));
+      const reason = await reasonSheet({ title: 'Reject this video?', intro: `It will not be published. Your reason is saved and used as feedback if you tap Redo later.${notesText ? ' Your timestamped notes from the player are filled in below.' : ''}`, okLabel: 'Reject video', danger: true, prefill: notesText });
       if (reason === null) return;
       payload = { reason };
     }
@@ -366,7 +372,8 @@ function detailDrawer(j) {
         : !await confirmModal('Stop making this video?', '<p>The video maker stops and this video is thrown away. Nothing is published.</p>', 'Stop making', true, 'Keep making')) return;
     }
     if (action === 'regenerate') {
-      const fb = await reasonSheet({ title: 'Make a new version?', intro: 'A fresh version is made (about 15 minutes) and replaces this one. Tell the maker what to change — optional.', okLabel: 'Start new version', optional: true, prefill: j.reviewNote || '' });
+      const playerNotes = notesToReason(getNotes(j.id));
+      const fb = await reasonSheet({ title: 'Make a new version?', intro: 'A fresh version is made (about 15 minutes) and replaces this one. Tell the maker what to change — optional.', okLabel: 'Start new version', optional: true, prefill: [j.reviewNote || '', playerNotes].filter(Boolean).join('\n') });
       if (fb === null) return;
       payload = fb ? { feedback: fb } : {};
     }

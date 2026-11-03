@@ -243,19 +243,52 @@ test('full delete removes runs, artifacts, files, every D1 row — in order, no 
   assert.ok(await dbm.getJob(env.DB, 'job-other-keep1'), 'other jobs untouched');
 });
 
-test('lineage: later attempts (Redo children) go too, the earlier attempt stays', async () => {
+test('linked versions: listed with engine/title/status, kept by default (detached), the earlier attempt stays', async () => {
   const env = await makeEnv();
   await addJob(env, { id: 'job-parent-aa1', title: 'Lineage topic', status: 'superseded' });
   await addJob(env, { id: 'job-child-bb1', title: 'Lineage topic', parentJobId: 'job-parent-aa1', status: 'failed', runId: '3001' });
-  await addJob(env, { id: 'job-grand-cc1', title: 'Lineage topic', parentJobId: 'job-child-bb1', status: 'needs-review', runId: '3002' });
-  addRun(A, 3001, 'job-child-bb1 (draft)'); addRun(A, 3002, 'job-grand-cc1 (draft)'); addRun(A, 3000, 'job-parent-aa1 (draft)');
+  await addJob(env, { id: 'job-grand-cc1', engine: 'verticals', title: 'Lineage topic Short', parentJobId: 'job-child-bb1', status: 'needs-review', runId: '3002' });
+  addRun(A, 3001, 'job-child-bb1 (draft)'); addRun(B, 3002, 'job-grand-cc1 (draft)'); addRun(A, 3000, 'job-parent-aa1 (draft)');
   const plan = await callDelete(env, 'job-child-bb1', 'GET');
-  assert.deepEqual(plan.body.attempts.map((a) => a.id).sort(), ['job-child-bb1', 'job-grand-cc1']);
+  assert.deepEqual(plan.body.attempts.map((a) => a.id), ['job-child-bb1'], 'nothing linked by default');
+  assert.equal(plan.body.linked.length, 1);
+  assert.deepEqual(
+    (({ id, engine, title, status, included }) => ({ id, engine, title, status, included }))(plan.body.linked[0]),
+    { id: 'job-grand-cc1', engine: 'verticals', title: 'Lineage topic Short', status: 'needs-review', included: false },
+  );
   const r = await deleteUntilSettled(env, 'job-child-bb1');
   assert.equal(r.body.state, 'done');
   assert.ok(await dbm.getJob(env.DB, 'job-parent-aa1'));
-  assert.equal(await dbm.getJob(env.DB, 'job-grand-cc1'), null);
+  const kept = await dbm.getJob(env.DB, 'job-grand-cc1');
+  assert.ok(kept, 'unticked linked version is kept');
+  assert.equal(kept.parentJobId, null, 'kept version is detached from the deleted job');
+  assert.ok(gh[B].runs.has('3002'), "the kept version's run is untouched");
   assert.deepEqual([...gh[A].runs.keys()], ['3000']);
+});
+
+test('linked versions: only the ticked ones are deleted (include)', async () => {
+  const env = await makeEnv();
+  await addJob(env, { id: 'job-root-dd1', title: 'Tick topic', status: 'failed', runId: '3101' });
+  await addJob(env, { id: 'job-kid1-ee1', title: 'Tick topic', parentJobId: 'job-root-dd1', status: 'failed', runId: '3102' });
+  await addJob(env, { id: 'job-kid2-ff1', engine: 'verticals', title: 'Tick topic', parentJobId: 'job-root-dd1', status: 'needs-review', runId: '3103' });
+  addRun(A, 3101, 'job-root-dd1 (draft)'); addRun(A, 3102, 'job-kid1-ee1 (draft)'); addRun(B, 3103, 'job-kid2-ff1 (draft)');
+  const req = new Request('https://c.pages.dev/api/jobs/job-root-dd1/delete?include=job-kid1-ee1', { method: 'GET' });
+  const g = await ep.onRequestGet({ env, params: { id: 'job-root-dd1' }, request: req });
+  const gb = await g.json();
+  assert.deepEqual(gb.attempts.map((a) => a.id).sort(), ['job-kid1-ee1', 'job-root-dd1']);
+  assert.deepEqual(gb.linked.map((l) => [l.id, l.included]).sort(), [['job-kid1-ee1', true], ['job-kid2-ff1', false]]);
+  let last;
+  for (let i = 0; i < 10; i++) {
+    const r = await ep.onRequestPost({ env, params: { id: 'job-root-dd1' }, request: new Request('https://c.pages.dev/api/jobs/job-root-dd1/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ include: ['job-kid1-ee1', 'not a valid id!'] }) }) });
+    last = await r.json();
+    if (!['continue', 'waiting'].includes(last.state)) break;
+  }
+  assert.equal(last.state, 'done');
+  assert.equal(await dbm.getJob(env.DB, 'job-root-dd1'), null);
+  assert.equal(await dbm.getJob(env.DB, 'job-kid1-ee1'), null);
+  assert.ok(await dbm.getJob(env.DB, 'job-kid2-ff1'), 'unticked version kept');
+  assert.ok(gh[B].runs.has('3103'));
+  assert.ok(!gh[A].runs.has('3101') && !gh[A].runs.has('3102'));
 });
 
 test('a video being made is stopped first, then deleted (force-cancel after 60 s)', async () => {

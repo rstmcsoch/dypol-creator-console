@@ -2,9 +2,12 @@
    Removes a video from the dashboard and GitHub (runs, logs, saved files,
    files in the code repository). Never deletes anything from YouTube.
    One simple confirm for every video; a video being made is stopped first;
-   a video uploading right now can't be deleted until the upload finishes. */
+   a video uploading right now can't be deleted until the upload finishes.
+   Linked versions (other versions made from this video) are listed one by one
+   with their maker, title and status; each is deleted ONLY if the owner ticks it.
+   Nothing linked is deleted by default. */
 import { api } from './api.js';
-import { icon, esc, openModal, closeModal, toast, friendlyError } from './ui.js';
+import { icon, esc, openModal, closeModal, toast, friendlyError, statusInfo, makerName } from './ui.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -19,6 +22,8 @@ export function summarize(plans) {
   if (runs) items.push(`${plural(runs, 'GitHub run', 'GitHub runs')} with ${runs === 1 ? 'its log' : 'their logs'}`);
   if (saved) items.push(plural(saved, 'saved file on GitHub', 'saved files on GitHub'));
   if (files) items.push(plural(files, 'file in the code repository', 'files in the code repository'));
+  const stored = sum('storedFiles');
+  if (stored) items.push(plural(stored, 'stored video file', 'stored video files'));
   return {
     items,
     onYouTube: plans.filter((p) => Number(p.youtubeStays || 0) > 0).length,
@@ -26,6 +31,35 @@ export function summarize(plans) {
     uploading: plans.filter((p) => p.uploading).length,
     sharedKept: sum('planShared'),
   };
+}
+
+/** The linked-versions block: one row per version, each with its own (unticked) checkbox. */
+export function linkedHtml(plans, videos = []) {
+  const selected = new Set(videos.map((v) => v.id));
+  const rows = [];
+  for (const p of plans) {
+    for (const l of p.linked || []) {
+      if (selected.has(l.id)) continue; // already chosen in this delete on its own
+      rows.push(`<li class="del-linked__row">
+        <label class="del-linked__label">
+          <input type="checkbox" class="del-linked__box" data-root="${esc(p.id)}" data-linked="${esc(l.id)}" ${l.status === 'uploading' ? 'disabled' : ''}>
+          <span class="del-linked__text"><strong>${esc(l.title || 'Untitled version')}</strong>
+            <span class="tiny muted">${esc(makerName(l.engine))} · ${esc(statusInfo(l.status).label)}${l.onYouTube ? ' · on YouTube (stays there)' : ''}${l.status === 'uploading' ? ' · uploading — can’t delete now' : ''}</span></span>
+        </label></li>`);
+    }
+  }
+  if (!rows.length) return '';
+  return `<div class="del-linked"><div class="small" style="font-weight:700">Linked versions (${rows.length})</div>
+    <div class="tiny muted">Made from ${plans.length > 1 ? 'these videos' : 'this video'}. They are <strong>kept</strong> unless you tick them.</div>
+    <ul class="del-linked__list">${rows.join('')}</ul>
+    <div class="tiny" id="del-linked-sum" aria-live="polite"></div></div>`;
+}
+
+/** Ticked linked versions per root video id: {rootId: [linkedId, ...]}. */
+export function tickedLinked(root = document) {
+  const out = {};
+  root.querySelectorAll?.('.del-linked__box:checked').forEach((b) => { (out[b.dataset.root] = out[b.dataset.root] || []).push(b.dataset.linked); });
+  return out;
 }
 
 export function confirmHtml(videos, plans) {
@@ -36,6 +70,7 @@ export function confirmHtml(videos, plans) {
       <span>${esc(videos[0].statusLabel || '')}</span></div>` : ''}
     <div class="del-what"><div class="small" style="font-weight:700">This removes:</div>
       <ul class="del-list">${s.items.map((t) => `<li>${icon('trash', 'icon--sm')}<span>${esc(t)}</span></li>`).join('')}</ul></div>
+    ${linkedHtml(plans, videos)}
     <ul class="confirm-list">
       ${s.onYouTube ? `<li>${icon('youtube', 'icon--sm')}<span><strong>${one ? 'The video stays on YouTube' : `${plural(s.onYouTube, 'video is', 'videos are')} on YouTube and stay there`}</strong> — nothing is deleted from YouTube.</span></li>` : ''}
       ${s.beingMade ? `<li>${icon('x', 'icon--sm')}<span>${one ? 'It’s still being made — it will be stopped first.' : `${plural(s.beingMade, 'video is', 'videos are')} still being made — stopped first.`}</span></li>` : ''}
@@ -68,11 +103,17 @@ export async function deleteVideos(videos, { onChange } = {}) {
       foot: `<button class="btn btn--secondary" id="del-keep">Keep</button>
              <button class="btn btn--danger-solid" id="del-ok" ${go.length ? '' : 'disabled'}>${icon('trash', 'icon--sm')} ${go.length > 1 ? `Delete ${go.length} videos` : 'Delete video'}</button>`,
     });
+    const sumEl = document.getElementById('del-linked-sum');
+    document.querySelectorAll('.del-linked__box').forEach((b) => b.addEventListener('change', () => {
+      const n = document.querySelectorAll('.del-linked__box:checked').length;
+      if (sumEl) sumEl.textContent = n ? `+ ${plural(n, 'linked version', 'linked versions')} will also be deleted, with ${n === 1 ? 'its' : 'their'} GitHub runs and files.` : '';
+    }));
     document.getElementById('del-keep').onclick = () => { closeModal(); resolve(false); };
-    document.getElementById('del-ok').onclick = () => resolve(true);
+    document.getElementById('del-ok').onclick = () => resolve(tickedLinked(document));
   });
   if (!ok) return false;
-  return runDeletes(go.map((p) => videos.find((v) => v.id === p.id) || { id: p.id }), plans, { onChange });
+  const include = typeof ok === 'object' ? ok : {};
+  return runDeletes(go.map((p) => ({ ...(videos.find((v) => v.id === p.id) || { id: p.id }), include: include[p.id] || [] })), plans, { onChange });
 }
 
 /** Progress + result. Also used by "Retry delete". */
@@ -105,7 +146,7 @@ export async function runDeletes(videos, plans = [], { onChange } = {}) {
     let out = null;
     for (let i = 0; i < MAX_PASSES; i++) {
       try {
-        out = await api.post(`/api/jobs/${encodeURIComponent(r.id)}/delete`, {});
+        out = await api.post(`/api/jobs/${encodeURIComponent(r.id)}/delete`, { include: r.include || [] });
       } catch (err) {
         out = { state: err.code === 'uploading' ? 'refused' : 'partial', error: err.code === 'uploading' ? err.message : (friendlyError(err, 'Couldn’t delete').msg || err.message) };
         break;
