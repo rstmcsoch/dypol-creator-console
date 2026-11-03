@@ -34,6 +34,6 @@ Tests: `node --test tests/ui.test.js`.
 ## Delete (added 2026-11-01, commit 9e4e895)
 - Delete lives on the video detail sheet and as a bulk action in Videos (select mode).
 - Deletes from the system only: dashboard/D1 rows, GitHub runs, artifacts and draft files. It never deletes anything from YouTube; a published video's sheet says so.
-- Deleting a job also deletes its linked versions (long + Short). The confirm sheet shows the version count.
+- Deleting a job also deletes its linked versions (long + Short). The confirm sheet shows the group being deleted, but it does not list each linked version's engine or status (the live delete incident showed it did not name the linked versions). Listing each linked version on the confirm sheet is a proposed improvement awaiting the owner's decision.
 - Deleting does not free the daily cap (cap_ledger).
 - Screens: notes/ui-screens-2026-10-31/delete/ in the project workspace.
