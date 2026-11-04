@@ -9,6 +9,9 @@
  *   drafts/<job_id>/*_preview.mp4         review copies (CRF 28, 1 s keyframes, +faststart)
  *   drafts/<job_id>/*_sprite.jpg          scrubber thumbnail strips
  *   drafts/<job_id>/*_captions.vtt, *_thumb.png, qc.json
+ *   drafts/<job_id>/hls/<version>/<long|short>/…  HLS stream (master.m3u8, v<i>/ playlists,
+ *                                          fMP4 init + 2–4 s segments, poster.jpg); served by
+ *                                          /api/hls/… and always left under drafts/
  *
  * A bucket lifecycle rule deletes drafts/ objects after 30 days. Objects of
  * published jobs are moved to published/<job_id>/ (no lifecycle rule) by
@@ -23,9 +26,9 @@ const SAFE_ID = /^[A-Za-z0-9._-]{1,100}$/;
 export const hasR2 = (env) => !!(env && env.MEDIA && typeof env.MEDIA.get === 'function');
 
 /** The manifest for a job (published/ first, then drafts/), with its prefix. null when not in R2. */
-export async function r2Manifest(env, jobId) {
+export async function r2Manifest(env, jobId, { preferDrafts = false } = {}) {
   if (!hasR2(env) || !SAFE_ID.test(String(jobId || ''))) return null;
-  for (const prefix of [PUBLISHED, DRAFTS]) {
+  for (const prefix of preferDrafts ? [DRAFTS, PUBLISHED] : [PUBLISHED, DRAFTS]) {
     try {
       const obj = await env.MEDIA.get(`${prefix}${jobId}/manifest.json`);
       if (!obj) continue;
@@ -138,7 +141,7 @@ export async function deleteJobObjects(env, jobIds) {
   for (const id of jobIds) {
     if (!SAFE_ID.test(String(id || ''))) continue;
     for (const prefix of [DRAFTS, PUBLISHED]) {
-      const keys = (await listKeys(env, `${prefix}${id}/`, 2)).map((o) => o.key);
+      const keys = (await listKeys(env, `${prefix}${id}/`, 10)).map((o) => o.key);
       for (let i = 0; i < keys.length; i += 1000) {
         const chunk = keys.slice(i, i + 1000);
         if (chunk.length) { await env.MEDIA.delete(chunk); n += chunk.length; }
@@ -189,7 +192,9 @@ export async function sweepPublished(env, db, { maxJobs = 1 } = {}) {
   const { results } = await db.prepare(`SELECT id FROM jobs WHERE id IN (${ph}) AND (status = 'published' OR youtube_id IS NOT NULL)`).bind(...ids).all();
   let moved = 0;
   for (const r of (results || []).slice(0, maxJobs)) {
-    const keys = await listKeys(env, `${DRAFTS}${r.id}/`, 2);
+    // HLS parts stay under drafts/ (hundreds of small files; the player falls back to
+    // the MP4 review copy once the 30-day rule removes them).
+    const keys = (await listKeys(env, `${DRAFTS}${r.id}/`, 5)).filter((o) => !o.key.includes('/hls/'));
     // manifest last, so a half-moved job is still readable from drafts/
     keys.sort((a, b) => (a.key.endsWith('manifest.json') ? 1 : 0) - (b.key.endsWith('manifest.json') ? 1 : 0));
     for (const o of keys) await moveObject(env, o.key, `${PUBLISHED}${o.key.slice(DRAFTS.length)}`);
@@ -212,4 +217,22 @@ export async function storageUsage(env) {
     published: { bytes: p.reduce((n, o) => n + o.size, 0), jobs: jobs(p, PUBLISHED) },
     draftsExpireDays: 30,
   };
+}
+
+const HLS_BASE = /^drafts\/([A-Za-z0-9._-]{1,100})\/hls\/([A-Za-z0-9_-]{1,40})\/(long|short)\/$/;
+/** Player URLs for the HLS streams in a manifest: {long|short: {master, poster, renditions, segment}}. */
+export function hlsInfo(manifest, jobId) {
+  const out = {};
+  for (const [kind, e] of Object.entries(manifest?.hls || {})) {
+    const m = HLS_BASE.exec(String(e?.base || ''));
+    if (!m || m[1] !== jobId || m[3] !== kind) continue;
+    const root = `/api/hls/${encodeURIComponent(jobId)}/${m[2]}/${kind}/`;
+    out[kind] = {
+      master: `${root}master.m3u8`,
+      poster: e.poster ? `${root}poster.jpg` : null,
+      segment: Number(e.segment) || null,
+      renditions: (e.renditions || []).slice(0, 6).map(({ w, h, kbps }) => ({ w, h, kbps })),
+    };
+  }
+  return out;
 }

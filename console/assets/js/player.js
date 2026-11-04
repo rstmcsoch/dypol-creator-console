@@ -1,7 +1,12 @@
-/* DYPOL review player — a small custom player for checking drafts (no library).
-   - Plays the compressed review copy from R2 (HTTP Range, preload=metadata: the
-     file is never downloaded first); "Full quality" switches to the original
-     render at the same moment; Download saves the original.
+/* DYPOL review player — a small custom player for checking drafts.
+   - Streams the draft like YouTube: HLS (small 2–4 s fMP4 parts, 360p → 1080p)
+     from R2 through /api/hls, starting on the lowest quality and stepping up
+     automatically. hls.js (light build, self-hosted) is loaded lazily; Safari
+     without MediaSource uses its native HLS. The parts start loading as soon as
+     the check screen opens, behind the first-frame poster.
+   - Drafts without a stream play the review copy / original MP4 (HTTP Range) or
+     the GitHub-artifact preview; "Full quality" switches to the original render
+     at the same moment; Download saves the original.
    - Big play/pause, tap left/right third to skip ±5 s, draggable scrubber with a
      thumbnail strip, speed 0.5/1/1.5/2×, frame-step, mute, fullscreen, captions,
      chapter marks (long video), QC warning marks with "Next warning", and
@@ -10,6 +15,41 @@
      M mute · F fullscreen · C captions · N note · Q next warning · 0–9 jump. */
 
 export const SPEEDS = [0.5, 1, 1.5, 2];
+export const HLS_URL = '/assets/vendor/hls.light-1.7.4.min.mjs';
+
+/* ---------- streaming (HLS) ---------- */
+let hlsModule = null;
+/** Load hls.js once (dynamic import, cached). Safe to call early to warm it. */
+export function loadHls() {
+  if (!hlsModule) hlsModule = import(HLS_URL).then((m) => m.default || m.Hls).catch((e) => { hlsModule = null; throw e; });
+  return hlsModule;
+}
+/** Start fetching what the player will need (hls.js) without blocking anything. */
+export function warmPlayer() {
+  if (typeof window === 'undefined' || streamMode() !== 'hlsjs') return;
+  loadHls().catch(() => {});
+}
+/** 'hlsjs' when MediaSource exists (Chrome, Android, desktop, iOS 17.1+), 'native' for Safari without it. */
+export function streamMode(win = globalThis, video = null) {
+  const mse = win.ManagedMediaSource || win.MediaSource || win.WebKitMediaSource;
+  if (mse) return 'hlsjs';
+  const v = video || (win.document && win.document.createElement('video'));
+  return v && typeof v.canPlayType === 'function' && v.canPlayType('application/vnd.apple.mpegurl') ? 'native' : 'none';
+}
+/** hls.js settings: start on the lowest rendition, buffer a little while paused, more once playing. */
+export const HLS_CONFIG = {
+  startLevel: 0,
+  capLevelToPlayerSize: true,
+  maxBufferLength: 8,
+  maxMaxBufferLength: 60,
+  backBufferLength: 30,
+  startFragPrefetch: true,
+  enableWorker: true,
+  lowLatencyMode: false,
+  testBandwidth: true,
+  abrEwmaDefaultEstimate: 2_000_000,
+  fragLoadPolicy: { default: { maxTimeToFirstByteMs: 8000, maxLoadTimeMs: 20000, timeoutRetry: { maxNumRetry: 2, retryDelayMs: 0, maxRetryDelayMs: 0 }, errorRetry: { maxNumRetry: 3, retryDelayMs: 500, maxRetryDelayMs: 4000 } } },
+};
 export const SKIP = 5;
 
 export function fmtTime(sec) {
@@ -92,14 +132,21 @@ const escH = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', 
  *   media   (kind, extra) => URL of /api/jobs/:id/media
  *   info    kind=info response ({source, main, videos:{long,short}}) or null
  *   engine  'gemini' | 'verticals'
+ *   openedAt performance.now() when the sheet opened (first-frame timing)
  */
-export function mountPlayer(el, { jobId, media, info, engine }) {
+export function mountPlayer(el, { jobId, media, info, engine, openedAt = null }) {
   const videos = info?.videos || {};
   const main = info?.main || (engine === 'verticals' ? 'short' : 'long');
   const hasShort = engine === 'gemini';
-  const st = { which: main, full: false, notes: getNotes(jobId), dragging: false, raf: 0, lastFast: 0 };
+  const st = { which: main, full: false, notes: getNotes(jobId), dragging: false, raf: 0, lastFast: 0, hlsBroken: {} };
   const meta = () => videos[st.which] || {};
+  const streams = info?.hls || {};
+  const stream = () => (!st.full && !st.hlsBroken[st.which] && streams[st.which]?.master ? streams[st.which] : null);
   const srcFor = () => media(st.which === main ? 'video' : 'short', st.full ? '&quality=full' : '');
+  // Timing (also shown with ?diag=1): sheet open → first frame, play → moving, seek → resumed.
+  const stats = { t0: openedAt ?? performance.now(), ttff: null, playAsk: null, playLatency: null, seeks: [], mode: null, level: null };
+  const diag = /[?&#]diag=1/.test(String(globalThis.location?.href || '')) || globalThis.localStorage?.getItem?.('dypol-diag') === '1';
+  let hls = null;
 
   el.innerHTML = `
   <div class="rp ${main === 'short' ? 'rp--short' : ''}" tabindex="0" aria-label="Review player">
@@ -155,11 +202,16 @@ export function mountPlayer(el, { jobId, media, info, engine }) {
 
   function hint() {
     const m = meta();
-    const src = info?.source === 'r2' ? (st.full ? `Original ${m.w || ''}×${m.h || ''}` : `Review copy ${m.preview?.w || ''}×${m.preview?.h || ''}`) : (st.full ? 'Full-quality file' : 'Small preview');
+    const lv = stats.level;
+    const src = stream() ? `Auto quality${lv ? ` · now ${lv.w}×${lv.h}` : ''}`
+      : info?.source === 'r2' ? (st.full ? `Original ${m.w || ''}×${m.h || ''}` : m.preview ? `Review copy ${m.preview.w || ''}×${m.preview.h || ''}` : `Original ${m.w || ''}×${m.h || ''}`)
+        : (st.full ? 'Full-quality file' : 'Small preview');
+    const dg = diag ? ` · first frame ${stats.ttff == null ? '…' : `${(stats.ttff / 1000).toFixed(2)} s`}${stats.playLatency != null ? ` · play ${(stats.playLatency / 1000).toFixed(2)} s` : ''}${stats.seeks.length ? ` · seek ${(stats.seeks[stats.seeks.length - 1] / 1000).toFixed(2)} s` : ''} · ${stats.mode || ''}` : '';
     const touch = typeof matchMedia === 'function' && matchMedia('(hover: none)').matches;
     $('.rp__hint').textContent = touch
-      ? `${src} · tap the left / right side of the picture to skip 5 s`
-      : `${src} · keys: Space play · ←/→ 5 s · J/L 10 s · comma/period one frame · C captions · M mute · F full screen · N note · Q next warning`;
+      ? `${src}${dg} · tap the left / right side of the picture to skip 5 s`
+      : `${src}${dg} · keys: Space play · ←/→ 5 s · J/L 10 s · comma/period one frame · C captions · M mute · F full screen · N note · Q next warning`;
+    root.dataset.ttff = stats.ttff == null ? '' : String(Math.round(stats.ttff));
   }
 
   function load(keepTime) {
@@ -168,7 +220,12 @@ export function mountPlayer(el, { jobId, media, info, engine }) {
     err.hidden = true;
     root.classList.add('is-loading');
     if (trackEl) { trackEl.remove(); trackEl = null; }
-    v.src = srcFor();
+    if (hls) { try { hls.destroy(); } catch { /* already gone */ } hls = null; }
+    const sm = stream();
+    v.preload = sm ? 'auto' : 'metadata'; // stream: fetch the first parts now; single file: headers only
+    v.poster = sm?.poster || (info?.source === 'r2' ? media('thumb') : '');
+    if (sm) attachStream(sm, keepTime ? t : 0, wasPlaying);
+    else { stats.mode = st.full ? 'original' : 'file'; v.src = srcFor(); }
     if (meta().captions) {
       trackEl = document.createElement('track');
       Object.assign(trackEl, { kind: 'captions', label: 'English', srclang: 'en', src: media('captions', `&video=${st.which}`) });
@@ -181,7 +238,7 @@ export function mountPlayer(el, { jobId, media, info, engine }) {
     const dl = $('[data-role="download"]');
     dl.href = media(st.which === main ? 'video' : 'short', '&quality=full&download=1');
     root.classList.toggle('rp--short', st.which === 'short');
-    if (keepTime && t > 0) {
+    if (keepTime && t > 0 && !sm) {
       // Resume at the same moment; retry once the file can play (some sources report seekable late).
       const resume = () => {
         try { v.currentTime = Math.min(t, (dur() || t) - 0.05); } catch { /* not seekable yet */ }
@@ -191,8 +248,42 @@ export function mountPlayer(el, { jobId, media, info, engine }) {
       v.addEventListener('loadedmetadata', resume, { once: true });
       v.addEventListener('canplay', () => { if (Math.abs(v.currentTime - t) > 1) resume(); }, { once: true });
     }
-    v.load();
+    if (!sm) v.load();
     marks(); chapters(); hint();
+  }
+
+  /** Attach the HLS stream: hls.js where MediaSource exists, else Safari's native HLS. */
+  function attachStream(sm, startAt, resume) {
+    const mode = streamMode(globalThis, v);
+    const fallback = () => { st.hlsBroken[st.which] = true; load(true); };
+    if (mode === 'native') {
+      stats.mode = 'native HLS';
+      v.src = sm.master;
+      if (startAt > 0) v.addEventListener('loadedmetadata', () => { try { v.currentTime = startAt; } catch { /* later */ } if (resume) v.play().catch(() => {}); }, { once: true });
+      v.load();
+      return;
+    }
+    if (mode !== 'hlsjs') { fallback(); return; }
+    stats.mode = 'HLS';
+    const which = st.which;
+    loadHls().then((Hls) => {
+      if (which !== st.which || st.full || !document.body.contains(root)) return;
+      if (!Hls || !Hls.isSupported()) { fallback(); return; }
+      const h = new Hls({ ...HLS_CONFIG, startPosition: startAt > 0 ? startAt : -1 });
+      hls = h;
+      let netErrors = 0;
+      h.on(Hls.Events.LEVEL_SWITCHED, (_, d) => { const l = h.levels?.[d.level]; if (l) { stats.level = { w: l.width, h: l.height }; hint(); } });
+      h.on(Hls.Events.ERROR, (_, d) => {
+        if (!d.fatal) return;
+        if (d.type === Hls.ErrorTypes.MEDIA_ERROR && netErrors < 1) { netErrors++; h.recoverMediaError(); return; }
+        try { h.destroy(); } catch { /* gone */ }
+        if (hls === h) hls = null;
+        fallback(); // the stream is missing or broken: play the MP4 instead
+      });
+      h.loadSource(sm.master);
+      h.attachMedia(v);
+      if (resume) h.once(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
+    }).catch(fallback);
   }
 
   function marks() {
@@ -249,6 +340,7 @@ export function mountPlayer(el, { jobId, media, info, engine }) {
   };
 
   function seek(t) {
+    stats.seekAsk = performance.now();
     const d = dur();
     v.currentTime = Math.max(0, Math.min(d ? d - 0.05 : t, t));
     paint();
@@ -418,7 +510,20 @@ export function mountPlayer(el, { jobId, media, info, engine }) {
   window.addEventListener('keydown', onKey);
 
   // Video events
-  v.addEventListener('play', () => { playIcon(); if (!st.raf) st.raf = requestAnimationFrame(loop); });
+  v.addEventListener('play', () => {
+    playIcon(); if (!st.raf) st.raf = requestAnimationFrame(loop);
+    stats.playAsk = performance.now();
+    if (hls) hls.config.maxBufferLength = 30; // playing: keep more ahead
+  });
+  v.addEventListener('loadeddata', () => {
+    if (stats.ttff == null) { stats.ttff = performance.now() - stats.t0; hint(); }
+  });
+  v.addEventListener('playing', () => {
+    if (stats.playAsk != null) { stats.playLatency = performance.now() - stats.playAsk; stats.playAsk = null; if (diag) hint(); }
+  });
+  v.addEventListener('seeked', () => {
+    if (stats.seekAsk != null) { stats.seeks.push(performance.now() - stats.seekAsk); stats.seekAsk = null; if (stats.seeks.length > 20) stats.seeks.shift(); if (diag) hint(); }
+  });
   v.addEventListener('pause', () => { playIcon(); paint(); });
   v.addEventListener('ended', playIcon);
   v.addEventListener('loadedmetadata', () => { root.classList.remove('is-loading'); marks(); paint(); });
@@ -428,9 +533,21 @@ export function mountPlayer(el, { jobId, media, info, engine }) {
   v.addEventListener('seeked', paint);
   v.addEventListener('progress', () => { if (v.paused) paint(); });
   v.addEventListener('error', () => {
+    if (hls) return; // hls.js reports its own errors (and falls back to the MP4)
     root.classList.remove('is-loading');
     err.hidden = false;
     err.textContent = st.full ? 'The full-quality file couldn’t be played here. Try Download original.' : 'The preview couldn’t be loaded yet. It appears when the video is ready.';
+    // Older drafts whose GitHub files have expired: say so plainly instead of spinning.
+    if (!st.full && info?.source !== 'r2') {
+      fetch(srcFor(), { headers: { Range: 'bytes=0-0' }, credentials: 'same-origin' })
+        .then((r) => (r.ok ? null : r.json().catch(() => null)))
+        .then((d) => {
+          if (d && (d.code === 'no-media' || d.code === 'no-run')) {
+            root.classList.add('is-unavailable');
+            err.textContent = 'Preview unavailable — this draft’s files have expired. Tap Redo to make a fresh version.';
+          }
+        }).catch(() => {});
+    }
   });
 
   // Closing the sheet pauses the video (the drawer is hidden, not removed).
@@ -445,9 +562,11 @@ export function mountPlayer(el, { jobId, media, info, engine }) {
 
   load(false);
   notes();
+  globalThis.__dypolPlayer = stats;
   return {
     el: root, video: v,
     notes: () => st.notes.slice(),
-    destroy: () => { window.removeEventListener('keydown', onKey); v.removeAttribute('src'); v.load(); },
+    stats,
+    destroy: () => { window.removeEventListener('keydown', onKey); if (hls) { try { hls.destroy(); } catch { /* gone */ } hls = null; } v.removeAttribute('src'); v.load(); },
   };
 }

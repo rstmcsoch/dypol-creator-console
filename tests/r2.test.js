@@ -324,8 +324,8 @@ test('the browser’s default player is gone from the review sheet; custom playe
   assert.match(p, /quality=full/);
   assert.match(p, /download=1/);
   assert.match(p, /kind: 'captions'/);
-  assert.doesNotMatch(p, /\bimport\b.*(hls|video\.js|plyr)/i, 'no heavy library');
-  assert.ok(p.length < 40000, 'lightweight');
+  assert.doesNotMatch(p, /^import\b.*(hls|video\.js|plyr)/im, 'no heavy library imported up front (hls.js loads lazily)');
+  assert.ok(p.length < 48000, 'lightweight');
 });
 
 /* ---------------- delete confirm sheet: linked versions ---------------- */

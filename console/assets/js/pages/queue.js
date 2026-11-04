@@ -13,7 +13,7 @@ import {
 } from '../ui.js';
 import { mountProgress, progressLine, fetchProgress } from '../progress.js';
 import { deleteVideos, runDeletes } from '../delete.js';
-import { mountPlayer, getNotes, notesToReason } from '../player.js';
+import { mountPlayer, getNotes, notesToReason, warmPlayer } from '../player.js';
 
 // Every job state belongs to exactly one chip, so the chips add up to "All".
 const STATUS_TABS = [
@@ -264,15 +264,19 @@ function detailDrawer(j) {
   });
   const playerBox = document.getElementById('review-player');
   if (playerBox) {
+    const openedAt = performance.now();
+    warmPlayer(); // hls.js loads in parallel with the player data
     fetch(media('info'), { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.json() : null)).catch(() => null)
       .then((info) => {
         if (!document.body.contains(playerBox)) return;
-        mountPlayer(playerBox, { jobId: j.id, media, info, engine: j.engine });
+        mountPlayer(playerBox, { jobId: j.id, media, info, engine: j.engine, openedAt });
       });
   }
   const credits = document.getElementById('visual-credits');
-  if (credits) {
+  // Picture credits load after the player has had a head start (they read a big zip on the server).
+  if (credits) setTimeout(() => {
+    if (!document.body.contains(credits)) return;
     fetch(`/api/jobs/${encodeURIComponent(j.id)}/media?kind=manifest`, { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -287,7 +291,7 @@ function detailDrawer(j) {
         credits.innerHTML = rows.length ? `<details><summary><strong>Where the pictures came from (${rows.length})</strong></summary><ul style="margin:4px 0 0 16px">${rows.slice(0, 40).join('')}</ul></details>` : 'No picture-source list in this video.';
       })
       .catch(() => { credits.textContent = 'Picture sources unavailable.'; });
-  }
+  }, 2500);
 
   const afterDelete = () => { closeDrawer(); refresh().catch(() => {}); };
   document.getElementById('btn-delete')?.addEventListener('click', async (ev) => {
@@ -563,5 +567,7 @@ async function refresh() {
 }
 
 export async function renderQueue() {
+  // Warm the streaming player (hls.js) while the list is on screen, so a tapped draft starts at once.
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(() => warmPlayer(), { timeout: 3000 }); else setTimeout(warmPlayer, 1500);
   await refresh();
 }

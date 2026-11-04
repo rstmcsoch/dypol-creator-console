@@ -49,6 +49,9 @@ export async function onRequest(context) {
       return json(null, 401, { error: 'Sign in required.', code: 'auth' });
     }
   }
+  // Video streaming (HLS playlists/segments): read-only, signed in above. Skip the
+  // per-isolate DB schema check so the first segment is never delayed by D1.
+  if (path.startsWith('/api/hls/') && (method === 'GET' || method === 'HEAD')) return context.next();
   // Idempotent, cached per isolate: new columns exist before any handler runs.
   if (context.env?.DB) {
     try { await ensureProgressSchema(context.env.DB); } catch { /* handler reports DB errors */ }

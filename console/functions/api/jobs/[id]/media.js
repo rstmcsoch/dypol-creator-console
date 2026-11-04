@@ -3,7 +3,7 @@ import { getJob, getSettings, listRuns } from '../../_lib/db.js';
 import { splitRepo, listRunArtifacts, downloadArtifact, artifactBlobUrl } from '../../_lib/github.js';
 import { listEntries, extractNamed } from '../../_lib/ziputil.js';
 import { openRemoteZip, streamEntry, RangeUnsupported } from '../../_lib/remotezip.js';
-import { r2Manifest, pickR2File, keyFor, streamR2 } from '../../_lib/r2.js';
+import { r2Manifest, pickR2File, keyFor, streamR2, hlsInfo } from '../../_lib/r2.js';
 
 /**
  * GET /api/jobs/:id/media?kind=video|short|thumb|manifest|list|info|sprite|captions
@@ -103,7 +103,7 @@ export async function onRequestGet(context) {
   if (!job) return json(null, 404, { error: 'Job not found.', code: 'not-found' });
 
   // ---- 1. Cloudflare R2 ----
-  const manifest = await r2Manifest(context.env, job.id);
+  const manifest = await r2Manifest(context.env, job.id, { preferDrafts: job.status !== 'published' && !job.youtubeId });
   if (kind === 'info') return json(null, 200, playerInfo(job, manifest));
   if (manifest) {
     let name = pickR2File(manifest, job.engine, kind, quality);
@@ -195,5 +195,6 @@ export function playerInfo(job, manifest) {
       resolution: manifest.resolution?.[k] || null,
     };
   }
-  return { source: 'r2', engine: job.engine, main: mainOf(job, manifest), videos, stored: manifest.prefix?.startsWith('published/') ? 'published' : 'draft' };
+  const hls = hlsInfo(manifest, job.id);
+  return { source: 'r2', engine: job.engine, main: mainOf(job, manifest), videos, hls, stored: manifest.prefix?.startsWith('published/') ? 'published' : 'draft' };
 }
