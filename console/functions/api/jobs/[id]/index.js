@@ -2,6 +2,7 @@ import { json, readBody, nowIso } from '../../_lib/util.js';
 import { getJob, getSettings, updateJob, appendLog, addActivity } from '../../_lib/db.js';
 import { findDuplicate, checkPublishGate, buildQuality } from '../../_lib/safeguards.js';
 import { pendingDeletions } from '../../_lib/deletejob.js';
+import { wantsEngineCheck, withEngineCheck } from '../../_lib/engineqc.js';
 
 /**
  * GET /api/jobs/:id — full review-panel payload.
@@ -14,6 +15,12 @@ export async function onRequestGet(context) {
   if (!job) return json(null, 404, { error: 'Job not found.', code: 'not-found' });
 
   const settings = await getSettings(db);
+  if (wantsEngineCheck(job)) {
+    // Drafts made before the console read engine verdicts: look once, then keep it.
+    const quality = await withEngineCheck(context.env, settings, job);
+    await updateJob(db, job.id, { quality }).catch(() => {});
+    job.quality = quality;
+  }
   if (settings.publishing.dedupe) {
     const dup = await findDuplicate(db, job.title, job.id);
     job.duplicateOf = dup ? { key: dup.key, id: dup.job.id, title: dup.job.title, url: dup.job.youtubeUrl } : null;
@@ -32,6 +39,7 @@ export async function onRequestGet(context) {
     }),
     ...(job.quality?.duplicate?.state === 'failed' ? { duplicate: job.quality.duplicate } : {}),
     ...(job.quality?.narration && job.quality.narration.source ? { narration: job.quality.narration } : {}),
+    ...(job.quality?.engine ? { engine: job.quality.engine } : {}),
   };
 
   const deleting = await pendingDeletions(db);

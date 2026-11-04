@@ -154,6 +154,14 @@ export function statusInfo(status) {
   return { tone: s[0], label, help: s[2] };
 }
 
+/** The video maker's own verdict (4 Nov 2026): hard automatic checks failed -> "Needs fixes". */
+export const needsFixes = (j) => j?.quality?.engine?.verdict === 'needs_fixes';
+export function needsFixesBadge(j) {
+  if (!needsFixes(j)) return '';
+  const n = (j.quality.engine.failures || []).length;
+  return `<span class="pill pill--red pill--fix" title="${esc((j.quality.engine.failures || []).join(' · '))}"><span class="dot"></span>Needs fixes${n ? ` · ${n}` : ''}</span>`;
+}
+
 export function statusPill(status) {
   const other = {
     'verified-by-upload': ['green', 'Working (proved by last upload)'], 'held-by-engine': ['gray', 'Kept by the video maker'],

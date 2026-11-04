@@ -26,6 +26,7 @@ import {
   classifyFailure, classifyByStep, loggedCategory, recordPublished, findUploadEvidence, FAILURE_CATEGORIES, acquireLock,
 } from './safeguards.js';
 import { deletingIds } from './deletejob.js';
+import { withEngineCheck } from './engineqc.js';
 
 const ts = () => new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata' });
 
@@ -389,9 +390,10 @@ export async function reconcileJobs(db, env, settings, { force = false, now = Da
       if (!job.runId) await updateJob(db, job.id, { runId: String(ghRunId) });
       const fresh = await getJob(db, job.id);
       if (st === 'completed') {
+        const quality = await withEngineCheck(env, settings, { ...fresh, runId: String(ghRunId) });
         await updateJob(db, job.id, {
-          status: 'needs-review', stage: 'Ready for review', progress: 100,
-          error: null, errorCategory: null, errorRetryable: null, errorLog: null,
+          status: 'needs-review', stage: quality.engine?.verdict === 'needs_fixes' ? 'Ready for review — needs fixes' : 'Ready for review', progress: 100,
+          error: null, errorCategory: null, errorRetryable: null, errorLog: null, quality,
         });
         await appendLog(db, fresh, { ts: ts(), level: 'ok', msg: `GitHub run ${ghRunId} succeeded — ready for review (reconciled)` });
         await addActivity(db, { icon: 'check', tone: 'violet', title: 'Video ready for review', sub: job.title, jobId: job.id });

@@ -20,6 +20,7 @@ import {
   listRuns, insertRun, updateRun, getJob, updateJob, appendLog, addActivity, getSettings,
 } from './db.js';
 import { buildQuality } from './safeguards.js';
+import { readEngineVerdict, engineCheck } from './engineqc.js';
 import { splitRepo, getWorkflowRun, listRunJobs } from './github.js';
 import { maybeDispatchFallback } from './fallback.js';
 import { isDeleting } from './deletejob.js';
@@ -381,15 +382,23 @@ async function applyToJob(db, env, settings, local, status, { failure, currentSt
   }
   if (!active) return null;
   if (status === 'completed') {
+    // The engine's own verdict (hard QC failures -> "needs_fixes") rides along with the draft.
+    const engine = engineCheck(await readEngineVerdict(env, settings, { ...job, runId: local.runId || job.runId }));
     await updateJob(db, job.id, {
-      status: 'needs-review', stage: 'Ready for review', progress: 100,
+      status: 'needs-review', stage: engine.verdict === 'needs_fixes' ? 'Ready for review — needs fixes' : 'Ready for review', progress: 100,
       error: null, errorCategory: null, errorRetryable: null, errorLog: null,
-      quality: buildQuality(job, {
-        hasArtifact: (local.artifacts || []).length > 0 ? true : null,
-        durationKnown: job.durationSec ? true : null,
-      }),
+      quality: {
+        ...buildQuality(job, {
+          hasArtifact: (local.artifacts || []).length > 0 ? true : null,
+          durationKnown: job.durationSec ? true : null,
+        }),
+        engine,
+      },
     });
     await appendLog(db, await getJob(db, job.id), { ts: logTs(), level: 'ok', msg: 'GitHub Actions run succeeded (webhook) — ready for review' });
+    if (engine.verdict === 'needs_fixes') {
+      await appendLog(db, await getJob(db, job.id), { ts: logTs(), level: 'warn', msg: `Video maker says it needs fixes: ${engine.failures.join('; ').slice(0, 500)}` });
+    }
     await addActivity(db, { icon: 'check', tone: 'violet', title: 'Video ready for review', sub: job.title, jobId: job.id });
     return 'needs-review';
   }

@@ -1382,3 +1382,14 @@ body, .card, .topbar, .tabbar, .icon-btn { transition: background-color .2s ease
 .del-linked__box { width: 22px; height: 22px; margin-top: 2px; flex: none; accent-color: var(--red); }
 .del-linked__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .del-linked__text strong { overflow-wrap: anywhere; }
+
+/* "Needs fixes" — the video maker's hard automatic checks failed (4 Nov 2026) */
+.pill--fix { margin-left: 6px; font-weight: 700; }
+.fixes { border: 1px solid #F1C9C9; background: #FFF6F6; border-radius: 14px; padding: 12px 14px; margin: 10px 0; display: flex; flex-direction: column; gap: 8px; color: var(--text, inherit); }
+.fixes__head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.fixes__head > .icon, .fixes__head strong { color: var(--red); }
+.fixes__list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 14px; overflow-wrap: anywhere; }
+.fixes__ack { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; cursor: pointer; font-size: 14px; }
+.fixes__ack input { width: 22px; height: 22px; flex: none; margin-top: 1px; accent-color: var(--red); }
+.btn--warnline { border-color: var(--red) !important; color: var(--red) !important; }
+[data-theme="dark"] .fixes { background: var(--red-soft); border-color: rgba(248, 113, 113, .35); }

@@ -9,7 +9,7 @@ import { api } from '../api.js';
 import {
   icon, esc, statusPill, thumb, fmtDateTime, fmtAgo, toast, openDrawer, closeDrawer, renderLogs,
   emptyState, confirmModal, openModal, closeModal, qcRow, friendlyStage, failureLabel, failureNext,
-  disabledAttr, makerName, statusInfo, errorToast, UI_PREFS, visWord,
+  disabledAttr, makerName, statusInfo, errorToast, UI_PREFS, visWord, needsFixes, needsFixesBadge,
 } from '../ui.js';
 import { mountProgress, progressLine, fetchProgress } from '../progress.js';
 import { deleteVideos, runDeletes } from '../delete.js';
@@ -107,11 +107,11 @@ function card(j) {
     ${thumb(j)}
     <span class="vitem__text">
       <span class="vitem__title">${esc(j.title || j.topic || 'Topic picked by the video maker')}</span>
-      <span class="vitem__meta">${statusPill(j.status)}</span>
+      <span class="vitem__meta">${statusPill(j.status)}${['needs-review', 'awaiting-review'].includes(j.status) ? needsFixesBadge(j) : ''}</span>
       <span class="vitem__sub">${esc(makerName(j.engine))} · ${esc(fmtAgo(j.updatedAt))}${j.attempt > 1 ? ` · version ${j.attempt}` : ''}${j.demo ? ' · demo' : ''}</span>
       ${err ? `<span class="vitem__err">${esc(failureLabel(j.errorCategory) || 'Something went wrong')}</span>` : ''}
       ${['dispatched', 'running', 'generating', 'rendering', 'uploading'].includes(j.status) ? `<span class="vitem__sub" data-pl="${esc(j.id)}">${esc(progressLine(j, null))}</span>` : ''}
-      ${info.tone === 'amber' && ['needs-review', 'awaiting-review'].includes(j.status) ? '<span class="vitem__cta">Tap to check it</span>' : ''}
+      ${info.tone === 'amber' && ['needs-review', 'awaiting-review'].includes(j.status) ? `<span class="vitem__cta">${needsFixes(j) ? 'Some automatic checks failed — tap to see them' : 'Tap to check it'}</span>` : ''}
       ${j.deletion ? `<span class="vitem__err">${esc(deletionLine(j))}</span>` : ''}
     </span>
     ${icon('chevronR', 'icon--sm')}
@@ -152,13 +152,19 @@ function detailDrawer(j) {
   const hasRun = !!j.runId && !j.demo;
   const media = (kind, extra = '') => `/api/jobs/${encodeURIComponent(j.id)}/media?kind=${kind}${extra}`;
   const qc = j.quality || {};
-  const qcIssues = j.status === 'published' ? [] : Object.entries(qc).filter(([, r]) => r?.state === 'failed');
+  const qcIssues = j.status === 'published' ? [] : Object.entries(qc).filter(([k, r]) => k !== 'engine' && r?.state === 'failed');
+  const fixes = canApprove && needsFixes(j) ? (qc.engine.failures || []) : [];
   const QC_NAMES = { title: 'Title length', metadata: 'Title & description', artifact: 'Video file', duration: 'Video length', narration: 'Voice', captions: 'Captions', duplicate: 'Repeat-topic check', oauth: 'YouTube sign-in', review: 'Your check', rights: 'Image & music rights' };
 
   const body = `
     ${j.deletion ? `<div class="state state--red">${icon('alert')}<div><strong>${j.deletion.running ? 'Being deleted…' : 'Deletion not finished'}</strong>
       <span>Some parts couldn’t be removed yet${j.deletion.remaining?.githubRuns ? ` (${j.deletion.remaining.githubRuns} GitHub run${j.deletion.remaining.githubRuns === 1 ? '' : 's'} left)` : ''}. Nothing was touched on YouTube.</span>
       <button class="btn btn--danger-solid btn--sm" id="btn-retry-delete" style="margin-top:8px;align-self:flex-start">${icon('refresh', 'icon--sm')} Retry delete</button></div></div>` : stateBanner(j, retriesLeft)}
+    ${canApprove && needsFixes(j) ? `<section class="fixes" id="needs-fixes" role="alert">
+      <div class="fixes__head">${icon('alert')}<strong>Needs fixes</strong><span class="tiny">The video maker’s automatic checks found ${fixes.length || 'some'} problem${fixes.length === 1 ? '' : 's'}.</span></div>
+      ${fixes.length ? `<ul class="fixes__list">${fixes.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}
+      <div class="tiny">Best: tap <strong>Redo</strong> (these problems are sent to the maker). You can still approve, but only after confirming you’ve seen them.</div>
+    </section>` : ''}
     ${hasRun ? `<div class="media-review" id="review-player" data-job="${esc(j.id)}">
       <div class="rp-skel ${j.format === 'short' ? 'rp-skel--short' : ''}"><span class="tiny muted">Loading the player…</span></div>
     </div>` : `<div class="player-ph">${thumb(j, true)}<div class="tiny muted">${j.demo ? 'Demo video — no real preview.' : 'The preview appears here when the video is ready.'}</div></div>`}
@@ -208,6 +214,7 @@ function detailDrawer(j) {
         <div>
           <div class="small" style="font-weight:700;margin-bottom:6px">All checks</div>
           <div class="qc">
+            ${qc.engine ? qcRow('Automatic checks by the video maker', qc.engine) : ''}
             ${qcRow('Title length (100 characters max)', qc.title)}
             ${qcRow('Title & description present', qc.metadata)}
             ${qcRow('Video file made', qc.artifact)}
@@ -238,7 +245,8 @@ function detailDrawer(j) {
     `<button class="btn ${cls}" data-jact="${action}" ${disabledAttr(why[action])}>${icon(ic, 'icon--sm')} ${label}</button>`;
 
   let primary = '';
-  if (canApprove) primary = btn('approve', 'Approve & publish', 'check', 'btn--primary btn--xl');
+  if (canApprove && needsFixes(j)) primary = btn('approve', 'Approve anyway…', 'alert', 'btn--secondary btn--xl btn--warnline');
+  else if (canApprove) primary = btn('approve', 'Approve & publish', 'check', 'btn--primary btn--xl');
   else if (canPublish) primary = btn('publish', 'Publish now', 'upload', 'btn--primary btn--xl');
   else if (canRetry) primary = btn('retry', j.status === 'publish_failed' ? 'Try upload again' : `Try again (${retriesLeft} left)`, 'refresh', 'btn--primary btn--xl');
   else if (canStop) primary = `<button class="btn btn--secondary btn--xl" data-jact="cancel">${icon('x', 'icon--sm')} Stop making</button>`;
@@ -350,6 +358,11 @@ function detailDrawer(j) {
       if (reason === null) return;
       payload = { reason };
     }
+    if (action === 'approve' && needsFixes(j)) {
+      const ok = await fixesConfirm(j);
+      if (!ok) return;
+      payload = { confirmNeedsFixes: true };
+    }
     if (action === 'approve') {
       let capText = '';
       try {
@@ -377,7 +390,8 @@ function detailDrawer(j) {
     }
     if (action === 'regenerate') {
       const playerNotes = notesToReason(getNotes(j.id));
-      const fb = await reasonSheet({ title: 'Make a new version?', intro: 'A fresh version is made (about 15 minutes) and replaces this one. Tell the maker what to change — optional.', okLabel: 'Start new version', optional: true, prefill: [j.reviewNote || '', playerNotes].filter(Boolean).join('\n') });
+      const fixNote = needsFixes(j) && (j.quality.engine.failures || []).length ? `Fix the failed checks: ${j.quality.engine.failures.join('; ')}` : '';
+      const fb = await reasonSheet({ title: 'Make a new version?', intro: 'A fresh version is made (about 15 minutes) and replaces this one. Tell the maker what to change — optional.', okLabel: 'Start new version', optional: true, prefill: [j.reviewNote || '', fixNote, playerNotes].filter(Boolean).join('\n') });
       if (fb === null) return;
       payload = fb ? { feedback: fb } : {};
     }
@@ -402,6 +416,25 @@ function detailDrawer(j) {
       errorToast(err, 'That didn’t work');
     }
   };
+}
+
+/** Second, explicit confirm for a "needs fixes" draft: the reviewer must tick that they saw the failed checks. */
+function fixesConfirm(j) {
+  const fails = j.quality?.engine?.failures || [];
+  return new Promise((resolve) => {
+    openModal({
+      title: 'Approve a video that needs fixes?',
+      body: `<p class="small">The video maker’s automatic checks failed on this video:</p>
+        ${fails.length ? `<ul class="fixes__list">${fails.map((f) => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}
+        <label class="fixes__ack"><input type="checkbox" id="fx-ack"> I’ve watched it and seen these problems, and I still want to approve it.</label>`,
+      foot: `<button class="btn btn--secondary" id="fx-cancel">Not yet</button>
+             <button class="btn btn--danger-solid" id="fx-ok" disabled aria-disabled="true">Yes, approve anyway</button>`,
+    });
+    const ok = document.getElementById('fx-ok');
+    document.getElementById('fx-ack').onchange = (e) => { ok.disabled = !e.target.checked; ok.setAttribute('aria-disabled', String(!e.target.checked)); };
+    document.getElementById('fx-cancel').onclick = () => { closeModal(); resolve(false); };
+    ok.onclick = () => { if (ok.disabled) return; closeModal(); resolve(true); };
+  });
 }
 
 async function openJob(id) {

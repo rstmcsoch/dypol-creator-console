@@ -1,6 +1,7 @@
 import { json } from '../../_lib/util.js';
 import { getJob, updateJob, appendLog, addActivity, getSettings } from '../../_lib/db.js';
 import { publishJob } from '../../_lib/publish.js';
+import { needsFixes } from '../../_lib/engineqc.js';
 
 /**
  * POST /api/jobs/:id/approve — ONE tap: approve AND publish.
@@ -9,10 +10,13 @@ import { publishJob } from '../../_lib/publish.js';
  * (dedupe, daily cap, lock, visibility from Settings). If a safeguard blocks
  * the upload, the job stays approved and the reason is returned.
  * body.publish === false approves only.
+ * A draft the video maker marked "needs_fixes" is only approved with
+ * body.confirmNeedsFixes === true (the reviewer ticked "I've seen the failed
+ * checks" in a second confirm); otherwise 409 code "needs-fixes".
  */
 export async function onRequestPost(context) {
   const db = context.env.DB;
-  const job = await getJob(db, context.params.id);
+  let job = await getJob(db, context.params.id);
   if (!job) return json(null, 404, { error: 'Job not found.', code: 'not-found' });
   if (!['needs-review', 'awaiting-review'].includes(job.status)) {
     return json(null, 409, { error: 'Only videos awaiting review can be approved.', code: 'state' });
@@ -22,7 +26,20 @@ export async function onRequestPost(context) {
   }
   let body = {};
   try { body = await context.request.json(); } catch { body = {}; }
+  if (needsFixes(job) && body.confirmNeedsFixes !== true) {
+    return json(null, 409, {
+      error: 'The video maker marked this video “needs fixes”. Look at the failed checks and confirm before approving.',
+      code: 'needs-fixes', failures: job.quality.engine.failures || [],
+    });
+  }
   const settings = await getSettings(db);
+  if (needsFixes(job)) {
+    await appendLog(db, job, {
+      ts: new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata' }), level: 'warn',
+      msg: `Reviewer confirmed approval despite failed checks: ${(job.quality.engine.failures || []).join('; ').slice(0, 400)}`,
+    });
+    job = await getJob(db, job.id);
+  }
 
   await updateJob(db, job.id, { status: 'approved', stage: 'Approved', scheduledFor: null });
   await appendLog(db, job, {

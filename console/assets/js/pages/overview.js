@@ -94,7 +94,7 @@ async function refresh() {
       <a class="attn attn--amber" href="${reviewCount === 1 && toCheck[0] ? openJob(toCheck[0].id) : '#/videos?tab=check'}">
         <div class="attn__icon">${icon('eye')}</div>
         <div class="attn__text"><strong>${reviewCount === 1 ? '1 video is waiting for your check' : `${reviewCount} videos are waiting for your check`}</strong>
-          <span>Watch, then approve, redo or reject. Nothing goes on YouTube until you approve.</span></div>
+          <span>Watch, then approve, redo or reject. Nothing goes on YouTube until you approve.${toCheck.some((j) => j?.quality?.engine?.verdict === 'needs_fixes') ? ` <strong>${toCheck.filter((j) => j?.quality?.engine?.verdict === 'needs_fixes').length} need${toCheck.filter((j) => j?.quality?.engine?.verdict === 'needs_fixes').length === 1 ? 's' : ''} fixes.</strong>` : ''}</span></div>
         <span class="btn btn--primary btn--sm">Check now</span>
       </a>`);
   }

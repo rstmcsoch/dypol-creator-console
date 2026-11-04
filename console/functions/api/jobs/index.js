@@ -1,8 +1,9 @@
 import { json, readBody, uid, nowIso, topicKey } from '../_lib/util.js';
-import { listJobs, insertJob, addActivity, getSettings, capUsage } from '../_lib/db.js';
+import { listJobs, insertJob, addActivity, getSettings, capUsage, updateJob } from '../_lib/db.js';
 import { findDuplicate } from '../_lib/safeguards.js';
 import { backgroundReconcile } from '../_lib/jobflow.js';
 import { pendingDeletions } from '../_lib/deletejob.js';
+import { wantsEngineCheck, withEngineCheck } from '../_lib/engineqc.js';
 
 /** GET /api/jobs — searchable, filterable queue. */
 export const ALL_STATUSES = ['queued', 'dispatched', 'running', 'generating', 'rendering', 'needs-review',
@@ -31,6 +32,15 @@ export async function onRequestGet(context) {
   counts['generating,dispatched,running'] = all.filter((j) => ['generating', 'dispatched', 'running'].includes(j.status)).length;
   counts['generating,rendering,uploading,queued'] = all.filter((j) => ['generating', 'rendering', 'uploading', 'queued', 'dispatched', 'running'].includes(j.status)).length;
   const settings = await getSettings(db);
+  // Engine verdicts for waiting drafts that don't have one yet (a few per load, in parallel).
+  const todo = jobs.filter((j) => wantsEngineCheck(j)).slice(0, 6);
+  if (todo.length) {
+    await Promise.all(todo.map(async (j) => {
+      const quality = await withEngineCheck(context.env, settings, j);
+      j.quality = quality;
+      await updateJob(db, j.id, { quality }).catch(() => {});
+    }));
+  }
   const usage = await capUsage(db);
   const deleting = await pendingDeletions(db);
   for (const j of jobs) if (deleting.has(j.id)) j.deletion = deleting.get(j.id);

@@ -1,5 +1,6 @@
 import { json, readBody } from '../../_lib/util.js';
 import { getJob, updateJob, appendLog } from '../../_lib/db.js';
+import { needsFixes } from '../../_lib/engineqc.js';
 
 /** POST /api/jobs/:id/schedule { when: ISO } */
 export async function onRequestPost(context) {
@@ -9,6 +10,10 @@ export async function onRequestPost(context) {
   const body = await readBody(context.request);
   if (!body.when) return json(null, 400, { error: 'Missing "when" (ISO timestamp).', code: 'validation' });
 
+  // Scheduling a waiting draft approves it, so a "needs fixes" draft needs the same explicit confirm.
+  if (needsFixes(job) && ['needs-review', 'awaiting-review'].includes(job.status) && body.confirmNeedsFixes !== true) {
+    return json(null, 409, { error: 'The video maker marked this video “needs fixes”. Open it, look at the failed checks and approve from there.', code: 'needs-fixes' });
+  }
   const patch = { scheduledFor: body.when };
   if (['needs-review', 'awaiting-review', 'queued'].includes(job.status)) {
     patch.status = 'scheduled';
