@@ -7,6 +7,7 @@ import { api } from '../api.js';
 import {
   icon, esc, toast, confirmModal, errorToast, UI_PREFS, MAKERS,
 } from '../ui.js';
+import { loadVoices, voiceOptions, patternOptions, DEFAULT_VOICE, DEFAULT_PATTERN } from '../voices.js';
 
 const NICHES = [
   ['general', 'General'], ['tech', 'Tech'], ['science', 'Science'], ['education', 'Education'],
@@ -19,6 +20,7 @@ const PHASES = [
 ];
 
 let form = { engine: null, phase: 'draft' };
+const look = { voice: null, pattern: null }; // narration voice + design pattern
 
 function kindCard(id, enabled) {
   const m = MAKERS[id];
@@ -42,6 +44,9 @@ export async function renderMake(root, ctx = {}) {
   }
   if (q.get('kind') && MAKERS[q.get('kind')]) form.engine = q.get('kind');
   const niche = UI_PREFS.defaultNiche || 'general';
+  const voices = await loadVoices();
+  look.voice = UI_PREFS.defaultVoice || DEFAULT_VOICE; // each visit starts on the Settings default
+  look.pattern = UI_PREFS.defaultPattern || DEFAULT_PATTERN;
 
   const draw = () => {
     root.innerHTML = `
@@ -74,6 +79,16 @@ export async function renderMake(root, ctx = {}) {
         <label class="field__label" for="mk-niche">Category</label>
         <select class="select select--lg" id="mk-niche">${NICHES.map(([v, l]) => `<option value="${v}" ${v === niche ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <div class="field__hint">Used to pick a topic when you leave it empty.</div>
+      </div>
+      <div class="field">
+        <label class="field__label" for="mk-voice">Voice</label>
+        <select class="select select--lg" id="mk-voice">${voiceOptions(voices, UI_PREFS.customVoices, look.voice)}</select>
+        <div class="field__hint">The narrator’s voice. Change the default in Settings.</div>
+      </div>
+      <div class="field">
+        <label class="field__label" for="mk-pattern">Design pattern</label>
+        <select class="select select--lg" id="mk-pattern">${patternOptions(look.pattern)}</select>
+        <div class="field__hint">How the video looks. More patterns are on the way.</div>
       </div>
 
       <div class="next-steps">
@@ -125,6 +140,8 @@ export async function renderMake(root, ctx = {}) {
     topic: root.querySelector('#mk-topic').value.trim(),
     niche: root.querySelector('#mk-niche').value,
     context: root.querySelector('#mk-context')?.value.trim() || undefined,
+    voice: root.querySelector('#mk-voice')?.value || look.voice,
+    design_pattern: root.querySelector('#mk-pattern')?.value || look.pattern,
   });
 
   const started = (title, msg) => {
@@ -137,6 +154,7 @@ export async function renderMake(root, ctx = {}) {
       b.onclick = () => {
         if (b.getAttribute('aria-disabled') === 'true') return;
         const keep = values();
+        look.voice = keep.voice; look.pattern = keep.design_pattern;
         form.engine = b.dataset.kind;
         draw();
         root.querySelector('#mk-topic').value = keep.topic;
@@ -156,7 +174,10 @@ export async function renderMake(root, ctx = {}) {
       btn.disabled = true; // double-submission guard
       btn.textContent = 'Starting…';
       try {
-        await api.engineRun(form.engine, { topic: v.topic || undefined, phase: form.phase, niche: v.niche, context: v.context });
+        await api.engineRun(form.engine, {
+          topic: v.topic || undefined, phase: form.phase, niche: v.niche, context: v.context,
+          voice: v.voice, design_pattern: v.design_pattern,
+        });
         started('Started!', `Your ${MAKERS[form.engine].name} is being made. Follow it on Home — about 15 minutes.`);
       } catch (err) {
         btn.disabled = false;

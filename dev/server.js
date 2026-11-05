@@ -18,6 +18,9 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { pathToFileURL } = require('url');
+/* Same voice / design-pattern validation as the Pages Functions (ESM module). */
+const voicesLib = () => import(pathToFileURL(path.join(__dirname, '..', 'console', 'functions', 'api', '_lib', 'voices.js')).href);
 
 const PORT = Number(process.env.PORT || 8788);
 const ROOT = path.join(__dirname, '..', 'console');
@@ -598,6 +601,19 @@ async function handleApi(req, res, url) {
           code: 'engine-disabled',
         });
       }
+      const V = await voicesLib();
+      let voice = V.DEFAULT_VOICE;
+      if (body.voice) {
+        const v = V.validateVoice(body.voice, db.settings.customVoices);
+        if (!v.ok) return json(res, 400, { error: v.error, code: 'bad-voice' });
+        voice = v.value;
+      } else if (V.validateVoice(db.settings.defaults.voice, db.settings.customVoices).ok) voice = V.normVoice(db.settings.defaults.voice);
+      let designPattern = V.DEFAULT_DESIGN_PATTERN;
+      if (body.design_pattern) {
+        const pv = V.validateDesignPattern(body.design_pattern);
+        if (!pv.ok) return json(res, 400, { error: pv.error, code: 'bad-design-pattern' });
+        designPattern = pv.value;
+      } else if (V.validateDesignPattern(db.settings.defaults.designPattern).ok) designPattern = db.settings.defaults.designPattern;
       const maxConcurrent = db.settings.orchestration.maxConcurrency ?? 1;
       const active = db.jobs.filter((j) => ['dispatched', 'running', 'generating', 'rendering', 'uploading'].includes(j.status));
       if (active.length >= maxConcurrent) {
@@ -637,6 +653,7 @@ async function handleApi(req, res, url) {
           { ts: new Date().toLocaleTimeString('en-GB', { timeZone: TZ }), level: 'ok', msg: 'Duplicate check passed' },
         ],
         runId: null, parentJobId: null, attempt: 1,
+        voice, designPattern, // demo only: carried to a Redo by the job clone
       };
       db.jobs.unshift(job);
       const run = {
@@ -1064,6 +1081,25 @@ async function handleApi(req, res, url) {
   if (p === '/api/settings' && method === 'PUT') {
     const body = await readBody(req);
     const merge = (a, b) => ({ ...a, ...(b || {}) });
+    const V = await voicesLib();
+    let customVoices = db.settings.customVoices || [];
+    if (body.customVoices !== undefined) {
+      try { customVoices = V.sanitizeCustomVoices(body.customVoices); } catch (err) { return json(res, 400, { error: err.message, code: 'bad-voice' }); }
+    }
+    const defaultsIn = { ...(body.defaults || {}) };
+    if (defaultsIn.voice !== undefined) {
+      const v = V.validateVoice(defaultsIn.voice, customVoices);
+      if (!v.ok) return json(res, 400, { error: v.error, code: 'bad-voice' });
+      defaultsIn.voice = v.value;
+    }
+    if (defaultsIn.designPattern !== undefined) {
+      const pv = V.validateDesignPattern(defaultsIn.designPattern);
+      if (!pv.ok) return json(res, 400, { error: pv.error, code: 'bad-design-pattern' });
+    }
+    // Demo has no GitHub token: a changed default can't reach the engines.
+    const prevVoice = db.settings.defaults.voice || V.DEFAULT_VOICE;
+    const engineSync = defaultsIn.voice && defaultsIn.voice !== prevVoice
+      ? { ok: false, notice: `Saved in console; engines still use ${prevVoice}` } : null;
     db.settings = {
       ...db.settings,
       github: merge(db.settings.github, body.github),
@@ -1074,10 +1110,11 @@ async function handleApi(req, res, url) {
         retryLimit: Math.max(0, Math.min(5, Number(body.orchestration?.retryLimit) || (db.settings.orchestration.retryLimit ?? 2))),
       },
       publishing: merge(db.settings.publishing, body.publishing),
-      defaults: merge(db.settings.defaults, body.defaults),
+      defaults: merge(db.settings.defaults, defaultsIn),
       schedule: merge(db.settings.schedule, body.schedule),
+      customVoices,
     };
-    return json(res, 200, { ok: true, message: 'Settings saved. Secrets remain server-side.' });
+    return json(res, 200, { ok: true, message: 'Settings saved. Secrets remain server-side.', ...(engineSync ? { engineSync } : {}) });
   }
 
   if (p === '/api/sync/github' && method === 'POST') {

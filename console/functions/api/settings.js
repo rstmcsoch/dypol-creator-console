@@ -1,6 +1,49 @@
 import { json, readBody, TZ } from './_lib/util.js';
 import { getSettings, saveSettings } from './_lib/db.js';
-import { checkToken } from './_lib/github.js';
+import { checkToken, setRepoVariable, getRepoVariable } from './_lib/github.js';
+import { validateVoice, validateDesignPattern, sanitizeCustomVoices } from './_lib/voices.js';
+
+/** Engine repos whose Actions variables carry the default voice / pattern. */
+export const ENGINE_VARIABLE_REPOS = [
+  { owner: 'rstmcsoch', repo: 'gemini-youtube-automation' },
+  { owner: 'rstmcsoch', repo: 'youtube-shorts-pipeline' },
+];
+export const VOICE_VARIABLE = 'DYPOL_DEFAULT_VOICE';
+export const PATTERN_VARIABLE = 'DYPOL_DEFAULT_PATTERN';
+
+/**
+ * Best-effort: copy the console's default voice / pattern into both engine
+ * repos' Actions variables with the console's own GitHub token. Never throws —
+ * a refusal (e.g. the token lacks "Variables: write") becomes a notice and the
+ * console save still stands.
+ */
+export async function syncEngineDefaults(token, wanted) {
+  const vars = [
+    wanted.voice ? [VOICE_VARIABLE, wanted.voice] : null,
+    wanted.pattern ? [PATTERN_VARIABLE, wanted.pattern] : null,
+  ].filter(Boolean);
+  const failed = new Map(); // variable name → first repo that refused it
+  for (const [name, value] of vars) {
+    for (const r of ENGINE_VARIABLE_REPOS) {
+      if (!token) { if (!failed.has(name)) failed.set(name, r); continue; }
+      try { await setRepoVariable(token, { ...r, name, value }); } catch { if (!failed.has(name)) failed.set(name, r); }
+    }
+  }
+  const confirmed = {};
+  if (wanted.voice && !failed.has(VOICE_VARIABLE)) confirmed.voice = wanted.voice;
+  if (wanted.pattern && !failed.has(PATTERN_VARIABLE)) confirmed.pattern = wanted.pattern;
+  if (!failed.size) return { ok: true, confirmed };
+  const still = [];
+  for (const [name, r] of failed) {
+    let current = null;
+    if (token) { try { current = await getRepoVariable(token, { ...r, name }); } catch { current = null; } }
+    still.push(current || 'their own default');
+  }
+  return {
+    ok: false, confirmed, failed: [...failed.keys()],
+    notice: `Saved in console; engines still use ${still.join(' · ')}`,
+  };
+}
 
 /**
  * GET/PUT /api/settings.
@@ -85,6 +128,25 @@ export async function onRequestPut(context) {
   const retryLimit = body.orchestration?.retryLimit;
   const dailyCap = body.publishing?.dailyCap;
 
+  // Narration voices + design pattern (validated; bad input is refused, not guessed).
+  let customVoices = current.customVoices;
+  if (body.customVoices !== undefined) {
+    try { customVoices = sanitizeCustomVoices(body.customVoices); } catch (err) {
+      return json(null, 400, { error: err.message, code: 'bad-voice' });
+    }
+  }
+  const defaultsIn = { ...(body.defaults || {}) };
+  if (defaultsIn.voice !== undefined) {
+    const v = validateVoice(defaultsIn.voice, customVoices);
+    if (!v.ok) return json(null, 400, { error: v.error, code: 'bad-voice' });
+    defaultsIn.voice = v.value;
+  }
+  if (defaultsIn.designPattern !== undefined) {
+    const p = validateDesignPattern(defaultsIn.designPattern);
+    if (!p.ok) return json(null, 400, { error: p.error, code: 'bad-design-pattern' });
+    defaultsIn.designPattern = p.value;
+  }
+
   await saveSettings(db, {
     github: merge(current.github, body.github),
     orchestration: {
@@ -97,8 +159,24 @@ export async function onRequestPut(context) {
       dailyCap: dailyCap ? Math.max(1, Math.min(10, Number(dailyCap))) : current.publishing.dailyCap,
     },
     engines: merge(current.engines, body.engines),
-    defaults: merge(current.defaults, body.defaults),
+    defaults: merge(current.defaults, defaultsIn),
     schedule: merge(current.schedule, body.schedule),
+    ...(body.customVoices !== undefined ? { customVoices } : {}),
   });
-  return json(null, 200, { ok: true, message: 'Settings saved. Credentials remain in server-side secrets.' });
+
+  // Push a changed default voice / pattern to the engines (best effort).
+  const synced = current.engineSync || {};
+  const wanted = {
+    voice: defaultsIn.voice && defaultsIn.voice !== synced.voice ? defaultsIn.voice : null,
+    pattern: defaultsIn.designPattern && defaultsIn.designPattern !== synced.pattern ? defaultsIn.designPattern : null,
+  };
+  let engineSync;
+  if (wanted.voice || wanted.pattern) {
+    engineSync = await syncEngineDefaults(context.env.GITHUB_TOKEN, wanted);
+    await saveSettings(db, { engineSync: { ...synced, ...engineSync.confirmed, at: new Date().toISOString() } });
+  }
+  return json(null, 200, {
+    ok: true, message: 'Settings saved. Credentials remain in server-side secrets.',
+    ...(engineSync ? { engineSync: { ok: engineSync.ok, ...(engineSync.notice ? { notice: engineSync.notice } : {}) } } : {}),
+  });
 }

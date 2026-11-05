@@ -146,6 +146,9 @@ async function loadPrefs() {
     UI_PREFS.paused = !!s.schedule?.automationPaused;
     UI_PREFS.windowStart = s.schedule?.windowStart || '';
     UI_PREFS.windowEnd = s.schedule?.windowEnd || '';
+    UI_PREFS.defaultVoice = s.defaults?.voice || 'am_michael';
+    UI_PREFS.defaultPattern = s.defaults?.designPattern || 'elements';
+    UI_PREFS.customVoices = Array.isArray(s.customVoices) ? s.customVoices : [];
   } catch { /* keep defaults */ }
 }
 

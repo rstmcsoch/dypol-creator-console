@@ -53,7 +53,7 @@ export const FEEDBACK_INPUT_MAX = 1500;
  * from an older run). Shared by Run, Redo and Retry.
  */
 export function buildDraftInputs(settings, engine, {
-  topic, context, niche, titleOverride, descriptionOverride, reviewerFeedback,
+  topic, context, niche, titleOverride, descriptionOverride, reviewerFeedback, voice, designPattern,
 } = {}) {
   return {
     ...(topic ? { topic: String(topic) } : {}),
@@ -68,6 +68,10 @@ export function buildDraftInputs(settings, engine, {
     ...(titleOverride ? { title_override: String(titleOverride) } : {}),
     ...(descriptionOverride ? { description_override: String(descriptionOverride).slice(0, 480) } : {}),
     ...(reviewerFeedback ? { reviewer_feedback: String(reviewerFeedback).slice(0, FEEDBACK_INPUT_MAX) } : {}),
+    // Narration voice / design pattern: sent only when given; dispatchForJob
+    // drops them while an engine workflow does not declare them yet.
+    ...(voice ? { voice: String(voice) } : {}),
+    ...(designPattern ? { design_pattern: String(designPattern) } : {}),
   };
 }
 

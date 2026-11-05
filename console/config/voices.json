@@ -1,0 +1,176 @@
+{
+  "engine": "kokoro",
+  "default": "am_michael",
+  "note": "Kokoro-82M English voices. Blends are written \"id:weight,id:weight\" (weights add up to 1).",
+  "voices": [
+    {
+      "id": "af_heart",
+      "label": "Heart · US female",
+      "lang": "en-us",
+      "gender": "female"
+    },
+    {
+      "id": "af_alloy",
+      "label": "Alloy · US female",
+      "lang": "en-us",
+      "gender": "female"
+    },
+    {
+      "id": "af_aoede",
+      "label": "Aoede · US female",
+      "lang": "en-us",
+      "gender": "female"
+    },
+    {
+      "id": "af_bella",
+      "label": "Bella · US female",
+      "lang": "en-us",
+      "gender": "female"
+    },
+    {
+      "id": "af_jessica",
+      "label": "Jessica · US female",
+      "lang": "en-us",
+      "gender": "female"
+    },
+    {
+      "id": "af_kore",
+      "label": "Kore · US female",
+      "lang": "en-us",
+      "gender": "female"
+    },
+    {
+      "id": "af_nicole",
+      "label": "Nicole · US female",
+      "lang": "en-us",
+      "gender": "female"
+    },
+    {
+      "id": "af_nova",
+      "label": "Nova · US female",
+      "lang": "en-us",
+      "gender": "female"
+    },
+    {
+      "id": "af_river",
+      "label": "River · US female",
+      "lang": "en-us",
+      "gender": "female"
+    },
+    {
+      "id": "af_sarah",
+      "label": "Sarah · US female",
+      "lang": "en-us",
+      "gender": "female"
+    },
+    {
+      "id": "af_sky",
+      "label": "Sky · US female",
+      "lang": "en-us",
+      "gender": "female"
+    },
+    {
+      "id": "am_adam",
+      "label": "Adam · US male",
+      "lang": "en-us",
+      "gender": "male"
+    },
+    {
+      "id": "am_echo",
+      "label": "Echo · US male",
+      "lang": "en-us",
+      "gender": "male"
+    },
+    {
+      "id": "am_eric",
+      "label": "Eric · US male",
+      "lang": "en-us",
+      "gender": "male"
+    },
+    {
+      "id": "am_fenrir",
+      "label": "Fenrir · US male",
+      "lang": "en-us",
+      "gender": "male"
+    },
+    {
+      "id": "am_liam",
+      "label": "Liam · US male",
+      "lang": "en-us",
+      "gender": "male"
+    },
+    {
+      "id": "am_michael",
+      "label": "Michael · US male",
+      "lang": "en-us",
+      "gender": "male",
+      "default": true
+    },
+    {
+      "id": "am_onyx",
+      "label": "Onyx · US male",
+      "lang": "en-us",
+      "gender": "male"
+    },
+    {
+      "id": "am_puck",
+      "label": "Puck · US male",
+      "lang": "en-us",
+      "gender": "male"
+    },
+    {
+      "id": "am_santa",
+      "label": "Santa · US male",
+      "lang": "en-us",
+      "gender": "male"
+    },
+    {
+      "id": "bf_alice",
+      "label": "Alice · UK female",
+      "lang": "en-gb",
+      "gender": "female"
+    },
+    {
+      "id": "bf_emma",
+      "label": "Emma · UK female",
+      "lang": "en-gb",
+      "gender": "female"
+    },
+    {
+      "id": "bf_isabella",
+      "label": "Isabella · UK female",
+      "lang": "en-gb",
+      "gender": "female"
+    },
+    {
+      "id": "bf_lily",
+      "label": "Lily · UK female",
+      "lang": "en-gb",
+      "gender": "female"
+    },
+    {
+      "id": "bm_daniel",
+      "label": "Daniel · UK male",
+      "lang": "en-gb",
+      "gender": "male"
+    },
+    {
+      "id": "bm_fable",
+      "label": "Fable · UK male",
+      "lang": "en-gb",
+      "gender": "male"
+    },
+    {
+      "id": "bm_george",
+      "label": "George · UK male",
+      "lang": "en-gb",
+      "gender": "male"
+    },
+    {
+      "id": "bm_lewis",
+      "label": "Lewis · UK male",
+      "lang": "en-gb",
+      "gender": "male"
+    }
+  ]
+}

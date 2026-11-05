@@ -8,6 +8,7 @@
 import { api } from '../api.js';
 import { quotaPanelShell, mountQuotaPanel } from '../quota-panel.js';
 import { icon, esc, toast, statusPill, errorToast, UI_PREFS } from '../ui.js';
+import { loadVoices, voiceOptions, patternOptions, DEFAULT_VOICE, DEFAULT_PATTERN } from '../voices.js';
 
 const MODES = [
   { id: 'primary_with_fallback', name: 'Main maker first, backup if it breaks', desc: '“Long video + Short” runs first. Only if it really fails does “Short only” try instead. (Mode 1)' },
@@ -28,9 +29,12 @@ const group = (id, ic, title, sub, inner, open = false) => `
     <div class="adv__body">${inner}</div>
   </details>`;
 
-async function refresh() {
+async function refresh(engineNotice = '') {
   const root = document.getElementById('page-root');
-  const s = await api.settings();
+  const [s, voices] = await Promise.all([api.settings(), loadVoices()]);
+  const customVoices = Array.isArray(s.customVoices) ? s.customVoices : [];
+  const defVoice = s.defaults?.voice || DEFAULT_VOICE;
+  const defPattern = s.defaults?.designPattern || DEFAULT_PATTERN;
   const h = s.health || {};
   const yt = s.youtube || { state: 'missing-credentials' };
   const P = s.publishing || {};
@@ -88,6 +92,20 @@ async function refresh() {
           <select class="select select--lg" id="s-lang">
             ${LANGS.map(([v, l]) => `<option value="${v}" ${s.defaults?.language === v ? 'selected' : ''}>${l}</option>`).join('')}
           </select></div>
+        <div class="field"><label class="field__label" for="s-default-voice">Default voice</label>
+          <select class="select select--lg" id="s-default-voice">${voiceOptions(voices, customVoices, defVoice)}</select>
+          <div class="field__hint">Picked first on the Make page. Also sent to the video makers.</div></div>
+        <div class="field"><label class="field__label" for="s-default-pattern">Default design pattern</label>
+          <select class="select select--lg" id="s-default-pattern">${patternOptions(defPattern)}</select>
+          <div class="field__hint">How new videos look.</div></div>
+        ${engineNotice ? `<div class="callout callout--warn set-wide small" id="s-engine-notice" role="status">${icon('alert', 'icon--sm')}<div>${esc(engineNotice)}</div></div>` : ''}
+        <div class="field set-wide" id="s-add-voice"><span class="field__label">Add voice</span>
+          <div class="row" style="gap:10px;flex-wrap:wrap">
+            <input class="input mono" id="s-voice-id" maxlength="120" placeholder="af_bella or af_bella:0.6,am_michael:0.4" aria-label="Voice id or blend" style="flex:2 1 220px">
+            <input class="input" id="s-voice-label" maxlength="60" placeholder="Name, e.g. Warm narrator" aria-label="Voice name" style="flex:1 1 140px">
+            <button type="button" class="btn btn--secondary" id="btn-add-voice">${icon('plus', 'icon--sm')} Add</button>
+          </div>
+          <div class="field__hint">A Kokoro voice id, or a blend of 2–4 voices with weights adding up to 1. ${customVoices.length ? `Your voices: ${customVoices.map((c) => esc(c.label || c.id)).join(', ')}.` : ''}</div></div>
       </div>
     </section>
 
@@ -301,22 +319,43 @@ async function refresh() {
         defaults: {
           format: val('#s-format'), language: val('#s-lang'),
           niche: val('#s-default-niche'), engine: val('#s-default-engine'),
+          voice: val('#s-default-voice'), designPattern: val('#s-default-pattern'),
         },
         schedule: {
           frequency: val('#s-freq'), windowStart: val('#s-wstart'), windowEnd: val('#s-wend'),
           automationPaused: on('#s-pause'),
         },
       });
-      toast('Saved', 'Your settings are updated.', 'ok');
+      const notice = res?.engineSync && !res.engineSync.ok ? (res.engineSync.notice || '') : '';
+      toast('Saved', notice || 'Your settings are updated.', notice ? 'warn' : 'ok', notice ? 8000 : undefined);
       Object.assign(UI_PREFS, {
+        defaultVoice: val('#s-default-voice'), defaultPattern: val('#s-default-pattern'),
         visibility: val('#s-privacy'), dailyCap: Number(val('#s-cap')), defaultEngine: val('#s-default-engine'),
         defaultNiche: val('#s-default-niche'), paused: on('#s-pause'), reviewRequired: on('#s-review'),
         engines: { gemini: { enabled: on('#s-eng-gemini') }, verticals: { enabled: on('#s-eng-verticals') } },
       });
-      await refresh();
+      await refresh(notice);
     } catch (err) {
       btn.disabled = false;
       errorToast(err, 'Couldn’t save');
+    }
+  };
+
+  root.querySelector('#btn-add-voice').onclick = async (e) => {
+    const addBtn = e.currentTarget;
+    const id = root.querySelector('#s-voice-id').value.replace(/\s+/g, '');
+    const label = root.querySelector('#s-voice-label').value.trim();
+    if (!id) { toast('Type a voice first', 'For example af_bella, or a blend like af_bella:0.6,am_michael:0.4.', 'warn'); root.querySelector('#s-voice-id').focus(); return; }
+    addBtn.disabled = true;
+    try {
+      const next = [...customVoices.filter((c) => c.id !== id), { id, label: label || id }];
+      await api.saveSettings({ customVoices: next });
+      UI_PREFS.customVoices = next;
+      toast('Voice added', `“${label || id}” is now in the Voice lists.`, 'ok');
+      await refresh();
+    } catch (err) {
+      addBtn.disabled = false;
+      errorToast(err, 'Couldn’t add the voice');
     }
   };
 

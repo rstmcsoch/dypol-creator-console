@@ -439,6 +439,32 @@ export async function updateRepoFile(token, { owner, repo, path, content, messag
   return true;
 }
 
+/** Read an Actions repository variable's value (null when it does not exist). */
+export async function getRepoVariable(token, { owner, repo, name }) {
+  try {
+    const d = await gh(token, `/repos/${owner}/${repo}/actions/variables/${encodeURIComponent(name)}`);
+    return d?.value ?? null;
+  } catch (err) {
+    if (err.status === 404) return null;
+    throw err;
+  }
+}
+
+/** Set an Actions repository variable: PATCH, or create it (POST) when it
+ *  does not exist yet. Needs the token's "Variables: read & write" permission;
+ *  throws with .status when GitHub refuses. */
+export async function setRepoVariable(token, { owner, repo, name, value }) {
+  const body = JSON.stringify({ name, value: String(value) });
+  try {
+    await gh(token, `/repos/${owner}/${repo}/actions/variables/${encodeURIComponent(name)}`, { method: 'PATCH', body });
+    return { created: false };
+  } catch (err) {
+    if (err.status !== 404) throw err;
+  }
+  await gh(token, `/repos/${owner}/${repo}/actions/variables`, { method: 'POST', body });
+  return { created: true };
+}
+
 /** Authenticated GET on the GitHub REST API (JSON). Throws with .status on errors. */
 export async function ghGet(token, path) {
   return gh(token, path);

@@ -1,5 +1,5 @@
 import { json, readBody, uid, nowIso } from '../../_lib/util.js';
-import { getJob, updateJob, appendLog, insertJob, addActivity, getSettings } from '../../_lib/db.js';
+import { getJob, updateJob, appendLog, insertJob, addActivity, getSettings, runsForJob } from '../../_lib/db.js';
 import { classifyError, buildQuality } from '../../_lib/safeguards.js';
 import { dispatchForJob, buildDraftInputs, FEEDBACK_INPUT_MAX } from '../../_lib/jobflow.js';
 
@@ -47,6 +47,10 @@ export async function onRequestPost(context) {
   await insertJob(db, child);
   if (feedback) await updateJob(db, child.id, { reviewNote: `Feedback from previous attempt: ${feedback}` });
 
+  // Redo keeps the original's narration voice + design pattern (as sent on
+  // its draft run). Missing → the engine uses its own default, as before.
+  const prevInputs = (await runsForJob(db, original.id, 'draft'))[0]?.inputs || {};
+
   let result;
   try {
     result = await dispatchForJob({
@@ -55,6 +59,7 @@ export async function onRequestPost(context) {
         topic: child.topic, niche: child.niche || 'tech',
         titleOverride: child.title, descriptionOverride: child.description || '',
         reviewerFeedback: feedback,
+        voice: prevInputs.voice, designPattern: prevInputs.design_pattern,
       }),
     });
   } catch (err) {

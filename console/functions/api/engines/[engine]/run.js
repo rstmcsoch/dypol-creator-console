@@ -2,9 +2,10 @@ import { json, readBody, uid, nowIso } from '../../_lib/util.js';
 import { getSettings, insertJob, addActivity, listJobs, getJob } from '../../_lib/db.js';
 import { findDuplicate, classifyError, buildQuality, ERROR_CATEGORIES } from '../../_lib/safeguards.js';
 import { dispatchForJob, buildDraftInputs } from '../../_lib/jobflow.js';
+import { validateVoice, validateDesignPattern, DEFAULT_VOICE, DEFAULT_DESIGN_PATTERN } from '../../_lib/voices.js';
 
 /**
- * POST /api/engines/:engine/run  { topic?, phase? }
+ * POST /api/engines/:engine/run  { topic?, phase?, voice?, design_pattern? }
  * Dispatches the engine's GitHub Actions workflow (workflow_dispatch) and
  * registers the job/run in the central job registry. All secrets stay server-side.
  *
@@ -36,6 +37,27 @@ export async function onRequestPost(context) {
   }
   if (!context.env.GITHUB_TOKEN) {
     return json(null, 409, { error: 'GITHUB_TOKEN secret is not configured on the server.', code: 'not-configured' });
+  }
+
+  // Narration voice + design pattern. An explicit value must be valid (400);
+  // a missing one falls back to the Settings default, then the built-in one.
+  let voice;
+  if (body.voice !== undefined && body.voice !== null && body.voice !== '') {
+    const v = validateVoice(body.voice, settings.customVoices);
+    if (!v.ok) return json(null, 400, { error: v.error, code: 'bad-voice' });
+    voice = v.value;
+  } else {
+    const d = validateVoice(settings.defaults?.voice, settings.customVoices);
+    voice = d.ok ? d.value : DEFAULT_VOICE;
+  }
+  let designPattern;
+  if (body.design_pattern !== undefined && body.design_pattern !== null && body.design_pattern !== '') {
+    const p = validateDesignPattern(body.design_pattern);
+    if (!p.ok) return json(null, 400, { error: p.error, code: 'bad-design-pattern' });
+    designPattern = p.value;
+  } else {
+    const d = validateDesignPattern(settings.defaults?.designPattern);
+    designPattern = d.ok ? d.value : DEFAULT_DESIGN_PATTERN;
   }
 
   // Concurrency gate (server-side, configurable).
@@ -77,6 +99,7 @@ export async function onRequestPost(context) {
     ...buildDraftInputs(settings, engine, {
       topic: title, niche: body.niche, context: body.context,
       titleOverride: body.titleOverride, descriptionOverride: body.descriptionOverride,
+      voice, designPattern,
     }),
   };
 
