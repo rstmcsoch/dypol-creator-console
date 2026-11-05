@@ -14,6 +14,7 @@ import { renderAnalytics } from './pages/analytics.js';
 import { renderRuns } from './pages/runs.js';
 import { renderSettings } from './pages/settings.js';
 import { initMotion, pageEnter } from './motion.js';
+import { escapeTarget } from './layers.js';
 
 // Main routes (tab bar + sidebar) and Advanced routes (sidebar section + Settings → More tools).
 const ROUTES = [
@@ -241,8 +242,15 @@ document.getElementById('btn-avatar').addEventListener('click', () => {
     toast('Signed out', 'See you soon.');
   };
 });
+// Esc closes only the top layer: the confirm first, then the review popup/drawer.
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { closeDrawer(); closeModal(); }
+  if (e.key !== 'Escape') return;
+  const target = escapeTarget({
+    modalOpen: document.getElementById('modal-wrap').classList.contains('is-open'),
+    drawerOpen: document.getElementById('drawer').classList.contains('is-open'),
+  });
+  if (target === 'modal') closeModal();
+  else if (target === 'drawer') closeDrawer();
 });
 document.getElementById('modal-wrap').addEventListener('click', (e) => {
   if (e.target.id === 'modal-wrap' && !document.getElementById('m-ok')) closeModal();

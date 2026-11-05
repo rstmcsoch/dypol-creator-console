@@ -1,4 +1,5 @@
 /* DYPOL Creator Console — shared UI toolkit (icons, formatting, charts, overlays) */
+import { popupKind } from './layers.js';
 
 /* ---------------- HTML escaping ---------------- */
 export const esc = (s) => String(s ?? '')
@@ -311,12 +312,24 @@ export function toast(title, message = '', kind = '', ms = 4200) {
   setTimeout(() => el.remove(), ms + 500);
 }
 
-export function openDrawer({ title, body, foot = '' }) {
+export function openDrawer({ title, body, foot = '', kind = '' }) {
+  const drawer = document.getElementById('drawer');
   document.getElementById('drawer-title').textContent = title;
   document.getElementById('drawer-body').innerHTML = body;
   document.getElementById('drawer-foot').innerHTML = foot;
-  document.getElementById('drawer').classList.add('is-open');
-  document.getElementById('drawer').setAttribute('aria-hidden', 'false');
+  drawer.dataset.kind = kind;
+  // The review sheet opens as a big centred popup (drawer--popup); every other
+  // drawer (e.g. technical history) stays a side sheet. Switching variants
+  // jumps to the new closed state first so the open animation is clean.
+  const popup = popupKind(kind);
+  if (drawer.classList.contains('drawer--popup') !== popup) {
+    drawer.style.transition = 'none';
+    drawer.classList.toggle('drawer--popup', popup);
+    void drawer.offsetWidth;
+    drawer.style.transition = '';
+  }
+  drawer.classList.add('is-open');
+  drawer.setAttribute('aria-hidden', 'false');
   document.getElementById('drawer-scrim').classList.add('is-open');
 }
 
@@ -340,6 +353,7 @@ export function closeModal() {
   document.activeElement?.blur?.();
   wrap.classList.remove('is-open');
   wrap.setAttribute('aria-hidden', 'true');
+  window.dispatchEvent(new Event('dypol:modalclose'));
 }
 
 export function confirmModal(title, bodyHtml, confirmLabel = 'Confirm', danger = false, cancelLabel = 'Cancel') {

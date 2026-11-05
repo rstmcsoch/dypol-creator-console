@@ -15,7 +15,30 @@ import { isDeleting } from './deletejob.js';
 
 const ts = () => new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata' });
 
-export async function publishJob(db, env, settings, job) {
+export const PRIVACY_STATUSES = ['private', 'unlisted', 'public'];
+
+/**
+ * Per-click visibility from the review sheet (POST body `privacy_status`).
+ * Absent → null (Settings → visibility is used). Anything else must be one of
+ * private|unlisted|public; `public` also needs `confirm_public: "PUBLISH"`
+ * (the reviewer typed PUBLISH in the confirm). Returns { ok, value } or
+ * { ok:false, status, body } ready for the HTTP response.
+ */
+export function parsePrivacyStatus(body) {
+  const raw = body && body.privacy_status;
+  if (raw === undefined || raw === null || raw === '') return { ok: true, value: null };
+  if (typeof raw !== 'string' || !PRIVACY_STATUSES.includes(raw)) {
+    return { ok: false, status: 400, body: { error: 'privacy_status must be private, unlisted or public.', code: 'validation' } };
+  }
+  if (raw === 'public' && body.confirm_public !== 'PUBLISH') {
+    return { ok: false, status: 400, body: { error: 'Publishing as public needs the typed confirmation PUBLISH.', code: 'confirm-public' } };
+  }
+  return { ok: true, value: raw };
+}
+
+export async function publishJob(db, env, settings, job, { privacyStatus = null } = {}) {
+  // Per-click choice wins; otherwise Settings → visibility (unchanged default).
+  const privacy = privacyStatus || settings.publishing.visibility;
   if (await isDeleting(db, job.id)) return { status: 409, body: { error: 'This video is being deleted.', code: 'deleting' } };
   // ---- Blind-retry protection for an upload that may have completed -------
   if (job.status === 'uploading' || job.status === 'publish_failed') {
@@ -71,7 +94,9 @@ export async function publishJob(db, env, settings, job) {
           topic: job.topic || job.title,
           // Engine handoff: the run that produced the approved draft.
           draft_run_id: job.runId || '',
-          privacy: settings.publishing.visibility,
+          privacy,
+          // Same value under the explicit name (stripped for workflows that don't declare it).
+          privacy_status: privacy,
           title_override: job.title,
           description_override: (job.description || '').slice(0, 480),
           // Stripped automatically for workflows that don't declare it (Engine A).
@@ -96,11 +121,11 @@ export async function publishJob(db, env, settings, job) {
     const fresh = await getJob(db, job.id);
     await appendLog(db, fresh, {
       ts: ts(), level: 'info',
-      msg: `Publish dispatched (visibility=${settings.publishing.visibility}, draft_run=${job.runId || 'same-run'}, publish_run=${fresh.publishRunId || 'pending'}, idempotency=${uploadIdempotencyKey(job.title, job.id)}) — safeguards passed`,
+      msg: `Publish dispatched (visibility=${privacy}${privacyStatus ? ' — chosen on review' : ''}, draft_run=${job.runId || 'same-run'}, publish_run=${fresh.publishRunId || 'pending'}, idempotency=${uploadIdempotencyKey(job.title, job.id)}) — safeguards passed`,
     });
     return { status: 202, body: {
       ok: true,
-      message: `Uploading as ${settings.publishing.visibility}. The YouTube link appears here when the upload finishes (about 1–3 minutes).`,
+      message: `Uploading as ${privacy}. The YouTube link appears here when the upload finishes (about 1–3 minutes).`,
       job: await getJob(db, job.id),
     } };
   } finally {

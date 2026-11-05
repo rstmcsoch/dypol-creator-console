@@ -351,7 +351,7 @@ function completeUpload(job) {
   job.youtubeId = id;
   job.youtubeUrl = `https://youtu.be/${id}`;
   job.quality = qualityDefaults('published');
-  job.logs.push({ ts: new Date().toLocaleTimeString('en-GB', { timeZone: TZ }), level: 'ok', msg: `YouTube upload complete id=${id} visibility=${db.settings.publishing.visibility}` });
+  job.logs.push({ ts: new Date().toLocaleTimeString('en-GB', { timeZone: TZ }), level: 'ok', msg: `YouTube upload complete id=${id} visibility=${job.privacyStatus || db.settings.publishing.visibility}` });
   db.uploads.push({ topicKey: key, youtubeId: id, jobId: job.id, at: now() });
   db.activity.unshift({ ts: now(), icon: 'upload', tone: 'green', title: 'Video uploaded', sub: job.title });
 }
@@ -863,6 +863,18 @@ async function handleApi(req, res, url) {
         if (job.quality?.duplicate?.state === 'failed') {
           return json(res, 409, { error: 'Approval blocked — duplicate check failed for this video.', code: 'duplicate' });
         }
+        const ps = parsePrivacyStatus(body);
+        if (!ps.ok) return json(res, ps.status, ps.body);
+        if (ps.value && body.publish !== false) {
+          // Per-click upload from the review sheet: approve + publish in one tap (as production).
+          job.status = 'approved';
+          job.stage = 'Approved';
+          job.scheduledFor = null;
+          job.updatedAt = now();
+          job.logs.push({ ts, level: 'ok', msg: `Approved by reviewer (visibility=${ps.value})` });
+          db.activity.unshift({ ts: now(), icon: 'check', tone: 'green', title: 'Video approved', sub: job.title });
+          return publishJob(job, res, ts, ps.value);
+        }
         job.status = 'scheduled';
         job.stage = 'Approved — awaiting publish window';
         job.scheduledFor = body.when || new Date(Date.now() + 3600e3).toISOString();
@@ -934,7 +946,9 @@ async function handleApi(req, res, url) {
         return json(res, 200, { ok: true, message: `Scheduled for ${new Date(body.when).toLocaleString('en-IN', { timeZone: TZ })} IST.` });
       }
       if (action === 'publish') {
-        return publishJob(job, res, ts);
+        const ps = parsePrivacyStatus(body);
+        if (!ps.ok) return json(res, ps.status, ps.body);
+        return publishJob(job, res, ts, ps.value);
       }
     }
   }
@@ -1166,7 +1180,22 @@ function classifyError(message) {
   return { category: 'unknown', retryable: true };
 }
 
-function publishJob(job, res, ts) {
+/** Mirrors functions/api/_lib/publish.js#parsePrivacyStatus. */
+const PRIVACY_STATUSES = ['private', 'unlisted', 'public'];
+function parsePrivacyStatus(body) {
+  const raw = body && body.privacy_status;
+  if (raw === undefined || raw === null || raw === '') return { ok: true, value: null };
+  if (typeof raw !== 'string' || !PRIVACY_STATUSES.includes(raw)) {
+    return { ok: false, status: 400, body: { error: 'privacy_status must be private, unlisted or public.', code: 'validation' } };
+  }
+  if (raw === 'public' && body.confirm_public !== 'PUBLISH') {
+    return { ok: false, status: 400, body: { error: 'Publishing as public needs the typed confirmation PUBLISH.', code: 'confirm-public' } };
+  }
+  return { ok: true, value: raw };
+}
+
+function publishJob(job, res, ts, privacyStatus = null) {
+  const privacy = privacyStatus || db.settings.publishing.visibility;
   // Blind-retry protection for an upload already in flight: never re-dispatch.
   if (job.status === 'uploading') {
     return json(res, 409, {
@@ -1206,11 +1235,12 @@ function publishJob(job, res, ts) {
       job.logs.push({ ts, level: 'error', msg: `Publish blocked — daily cap ${db.settings.publishing.dailyCap} reached` });
       return json(res, 409, { error: `Daily publishing cap reached (${db.settings.publishing.dailyCap}/day, IST).`, code: 'daily-cap' });
     }
+    job.privacyStatus = privacy;
     job.status = 'uploading';
     job.stage = 'Uploading to YouTube…';
     job.progress = null; // honest: no fabricated percentage mid-upload
     job.updatedAt = now();
-    job.logs.push({ ts, level: 'info', msg: `Publish started (visibility=${db.settings.publishing.visibility}, idempotency=${job.id}:${topicKey(job.title)})` });
+    job.logs.push({ ts, level: 'info', msg: `Publish started (visibility=${privacy}, privacy_status=${privacy}, idempotency=${job.id}:${topicKey(job.title)})` });
     // simulated upload completes shortly; keeps the demo responsive
     setTimeout(() => completeUpload(job), 1500);
     return json(res, 202, { ok: true, message: 'Publishing — safeguards passed (dedupe, cap, lock).', job });

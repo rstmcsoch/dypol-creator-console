@@ -719,3 +719,45 @@ details[open] > summary ~ * { animation: fold-in var(--dur-med) var(--ease-out);
 .drawer .qc__row .pill { white-space: normal; text-align: right; max-width: 100%; }
 .drawer .mini-details.tech { min-width: 0; }
 .drawer .kv { grid-template-columns: minmax(84px, auto) minmax(0, 1fr); }
+
+/* ============================================================
+   Review popup — the review sheet (#drawer, dataset.kind === 'review')
+   opens as a big centred popup. Other drawers keep the side sheet.
+   Open/close: scale + fade (transform/opacity only).
+   ============================================================ */
+.drawer.drawer--popup {
+  top: 50%; left: 50%; right: auto; bottom: auto;
+  width: 90vw; height: 90vh; max-width: 1480px;
+  border-radius: 26px; overflow: hidden;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, .28);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translate(-50%, -50%) scale(.96);
+  transition: transform var(--dur-med) var(--ease-out), opacity var(--dur-med) var(--ease-out), visibility 0s linear var(--dur-med);
+  will-change: transform, opacity;
+}
+.drawer.drawer--popup.is-open {
+  opacity: 1; visibility: visible; pointer-events: auto;
+  transform: translate(-50%, -50%) scale(1);
+  transition: transform var(--dur-med) var(--ease-out), opacity var(--dur-med) var(--ease-out), visibility 0s;
+}
+@media (max-width: 768px) {
+  .drawer.drawer--popup {
+    top: 0; left: 0; width: 100vw; height: 100vh; height: 100dvh; max-width: none;
+    border-radius: 0; transform: scale(.97);
+  }
+  .drawer.drawer--popup.is-open { transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .drawer.drawer--popup, .drawer.drawer--popup.is-open { transform: translate(-50%, -50%); transition: none; }
+}
+@media (prefers-reduced-motion: reduce) and (max-width: 768px) {
+  .drawer.drawer--popup, .drawer.drawer--popup.is-open { transform: none; }
+}
+.upload-opts { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.upload-opts__label { padding-left: 2px; }
+@media (min-width: 1025px) {
+  #drawer:has(#drawer-body > details.tech) .foot-stack > .upload-opts { flex: 2; }
+}
+@media (max-width: 480px) {
+  .upload-opts .foot-row .btn { padding-inline: 8px; font-size: 13px; }
+}

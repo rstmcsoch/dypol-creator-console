@@ -1,6 +1,6 @@
 import { json } from '../../_lib/util.js';
 import { getJob, updateJob, appendLog, addActivity, getSettings } from '../../_lib/db.js';
-import { publishJob } from '../../_lib/publish.js';
+import { publishJob, parsePrivacyStatus } from '../../_lib/publish.js';
 import { needsFixes } from '../../_lib/engineqc.js';
 
 /**
@@ -13,6 +13,9 @@ import { needsFixes } from '../../_lib/engineqc.js';
  * A draft the video maker marked "needs_fixes" is only approved with
  * body.confirmNeedsFixes === true (the reviewer ticked "I've seen the failed
  * checks" in a second confirm); otherwise 409 code "needs-fixes".
+ * Optional body.privacy_status (private|unlisted|public) is validated before
+ * anything changes and used for this upload; public needs
+ * body.confirm_public === "PUBLISH".
  */
 export async function onRequestPost(context) {
   const db = context.env.DB;
@@ -26,6 +29,8 @@ export async function onRequestPost(context) {
   }
   let body = {};
   try { body = await context.request.json(); } catch { body = {}; }
+  const ps = parsePrivacyStatus(body);
+  if (!ps.ok) return json(null, ps.status, ps.body);
   if (needsFixes(job) && body.confirmNeedsFixes !== true) {
     return json(null, 409, {
       error: 'The video maker marked this video “needs fixes”. Look at the failed checks and confirm before approving.',
@@ -44,14 +49,14 @@ export async function onRequestPost(context) {
   await updateJob(db, job.id, { status: 'approved', stage: 'Approved', scheduledFor: null });
   await appendLog(db, job, {
     ts: new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata' }), level: 'ok',
-    msg: `Approved by reviewer (visibility=${settings.publishing.visibility})`,
+    msg: `Approved by reviewer (visibility=${ps.value || settings.publishing.visibility})`,
   });
   await addActivity(db, { icon: 'check', tone: 'green', title: 'Video approved', sub: job.title, jobId: job.id });
   if (body.publish === false) {
     return json(null, 200, { ok: true, approved: true, message: 'Approved. Tap Publish when ready.' });
   }
 
-  const pub = await publishJob(db, context.env, settings, await getJob(db, job.id));
+  const pub = await publishJob(db, context.env, settings, await getJob(db, job.id), { privacyStatus: ps.value });
   if (pub.status >= 400) {
     return json(null, 200, {
       ok: true, approved: true, published: false, code: pub.body.code,

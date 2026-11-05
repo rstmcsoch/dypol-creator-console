@@ -255,11 +255,21 @@ function detailDrawer(j) {
     why.regenerate ? '' : btn('regenerate', 'Redo', 'refresh'),
     isIdea ? `<button class="btn btn--danger" data-jact="cancel">${icon('x', 'icon--sm')} Remove idea</button>` : REJECTABLE.includes(j.status) ? btn('reject', 'Reject', 'x', 'btn--danger') : '',
   ].filter(Boolean).join('');
+  // Per-click upload options (review sheet): each opens its own confirm; Public needs PUBLISH typed.
+  const uploadWhy = canApprove ? why.approve : why.publish;
+  const uploadBtn = (ps, label, ic, cls) =>
+    `<button class="btn ${cls}" data-jact="upload" data-privacy="${ps}" ${disabledAttr(uploadWhy)}>${icon(ic, 'icon--sm')} ${label}</button>`;
+  const uploadOpts = canApprove || canPublish
+    ? `<div class="upload-opts" role="group" aria-label="Upload options">
+        <span class="tiny muted upload-opts__label">Or choose how it goes up:</span>
+        <div class="foot-row">${uploadBtn('private', 'Upload private', 'lock', 'btn--secondary')}${uploadBtn('unlisted', 'Upload unlisted', 'eye', 'btn--secondary')}${uploadBtn('public', 'Publish public', 'upload', 'btn--warnline')}</div>
+      </div>`
+    : '';
   const foot = j.status === 'published'
     ? `<div class="foot-stack">${videoLinks(j, true) || '<span class="small muted">On YouTube.</span>'}</div>`
-    : `<div class="foot-stack">${primary}${secondary ? `<div class="foot-row">${secondary}</div>` : ''}</div>`;
+    : `<div class="foot-stack">${primary}${uploadOpts}${secondary ? `<div class="foot-row">${secondary}</div>` : ''}</div>`;
 
-  openDrawer({ title: canApprove ? 'Check this video' : 'Video', body, foot });
+  openDrawer({ title: canApprove ? 'Check this video' : 'Video', body, foot, kind: 'review' });
   document.getElementById('drawer').dataset.kind = 'review';
   mountProgress(document.getElementById('job-progress'), `/api/jobs/${encodeURIComponent(j.id)}/progress`, {
     showWhenDone: false,
@@ -351,6 +361,7 @@ function detailDrawer(j) {
     const b = e.target.closest('[data-jact]');
     if (!b || b.disabled || b.getAttribute('aria-disabled') === 'true') return;
     const action = b.dataset.jact;
+    if (action === 'upload') { await uploadWithPrivacy(j, b, { canApprove }); return; }
     let payload = {};
     if (action === 'reject') {
       const notesText = notesToReason(getNotes(j.id));
@@ -416,6 +427,98 @@ function detailDrawer(j) {
       errorToast(err, 'That didn’t work');
     }
   };
+}
+
+const PRIVACY_COPY = {
+  private: { word: 'Private', title: 'Upload as private?', ok: 'Upload private', line: 'Only you can see it on YouTube. You can change it in YouTube Studio later.' },
+  unlisted: { word: 'Unlisted', title: 'Upload as unlisted?', ok: 'Upload unlisted', line: 'Only people with the link can see it. It doesn’t show on your channel or in search.' },
+  public: { word: 'Public', title: 'Publish publicly?', ok: 'Publish public', line: 'Everyone can find and watch it — on your channel, in search and in subscribers’ feeds.' },
+};
+
+/**
+ * One upload-option tap: the same gates as Approve & publish / Publish now
+ * (needs-fixes confirm, server lock, daily cap, duplicate check), plus a
+ * confirm for the chosen visibility. Public needs PUBLISH typed.
+ * Sends privacy_status to /approve (awaiting review) or /publish (approved).
+ */
+async function uploadWithPrivacy(j, b, { canApprove }) {
+  const ps = b.dataset.privacy;
+  const copy = PRIVACY_COPY[ps];
+  if (!copy) return;
+  const payload = { privacy_status: ps };
+  if (canApprove && needsFixes(j)) {
+    if (!await fixesConfirm(j)) return;
+    payload.confirmNeedsFixes = true;
+  }
+  let capText = '';
+  try {
+    const l = await api.jobs('?status=published&sort=newest');
+    if (l.cap) capText = `This will be upload ${Math.min(l.cap.used + 1, l.cap.limit)} of ${l.cap.limit} today.`;
+  } catch { /* optional */ }
+  const typed = await privacyConfirm(j, ps, copy, capText);
+  if (!typed) return;
+  if (ps === 'public') payload.confirm_public = 'PUBLISH';
+  b.disabled = true; // double-submission guard
+  try {
+    const res = await api.jobAction(j.id, canApprove ? 'approve' : 'publish', payload);
+    closeDrawer();
+    if (res.published === false) toast('Approved — not uploaded yet', res.message || 'Open it later and choose an upload option.', 'warn', 6000);
+    else toast(ps === 'public' ? 'Publishing…' : 'Uploading…', `It’s going up on YouTube as ${copy.word}.`, 'ok', 6000);
+    await refresh();
+  } catch (err) {
+    b.disabled = false;
+    errorToast(err, 'That didn’t work');
+  }
+}
+
+/** Confirm for one visibility. Public: OK stays disabled until PUBLISH is typed. Esc / backdrop = cancel. */
+function privacyConfirm(j, ps, copy, capText) {
+  const isPublic = ps === 'public';
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (v) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('dypol:modalclose', onClose);
+      document.getElementById('modal-wrap').removeEventListener('click', onWrap);
+      closeModal();
+      resolve(v);
+    };
+    const onClose = () => done(false);
+    const onWrap = (e) => { if (e.target.id === 'modal-wrap') done(false); };
+    openModal({
+      title: copy.title,
+      body: `<div class="confirm-card"><strong>${esc(j.title || 'This video')}</strong>
+          <span>${esc(makerName(j.engine))}${j.engine === 'gemini' ? ' — the video and its Short both go up' : ''}</span></div>
+        <ul class="confirm-list">
+          <li>${icon(isPublic ? 'alert' : 'eye', 'icon--sm')}<span>Goes up as <strong>${esc(copy.word)}</strong> — ${esc(copy.line)}</span></li>
+          ${capText ? `<li>${icon('upload', 'icon--sm')}<span>${esc(capText)}</span></li>` : ''}
+          <li>${icon('shield', 'icon--sm')}<span>The daily limit, repeat-topic check and upload lock still apply.</span></li>
+        </ul>
+        ${isPublic ? `<div class="field"><label class="field__label" for="pv-type">Type <strong>PUBLISH</strong> to confirm</label>
+          <input class="input input--lg" id="pv-type" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="PUBLISH"></div>` : ''}`,
+      foot: `<button class="btn btn--secondary" id="m-cancel">Not yet</button>
+             <button class="btn ${isPublic ? 'btn--danger-solid' : 'btn--primary'}" id="m-ok" ${isPublic ? 'disabled aria-disabled="true"' : ''}>${esc(copy.ok)}</button>`,
+    });
+    const ok = document.getElementById('m-ok');
+    const input = document.getElementById('pv-type');
+    if (input) {
+      input.oninput = () => {
+        const good = input.value.trim() === 'PUBLISH';
+        ok.disabled = !good;
+        ok.setAttribute('aria-disabled', String(!good));
+      };
+      setTimeout(() => input.focus(), 50);
+    }
+    document.getElementById('m-cancel').onclick = () => done(false);
+    ok.onclick = () => {
+      if (ok.disabled) return;
+      if (isPublic && input.value.trim() !== 'PUBLISH') return;
+      done(true);
+    };
+    document.getElementById('modal-wrap').addEventListener('click', onWrap);
+    window.addEventListener('dypol:modalclose', onClose);
+  });
 }
 
 /** Second, explicit confirm for a "needs fixes" draft: the reviewer must tick that they saw the failed checks. */
