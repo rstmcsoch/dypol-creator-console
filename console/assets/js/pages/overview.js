@@ -233,6 +233,11 @@ async function refresh() {
   // Quiet unless something is wrong.
   api.quota().then((q) => {
     const probs = quotaProblems(q);
+    const gh = q?.storage;
+    if (gh && (gh.state === 'bad' || gh.state === 'warn') && typeof gh.usedBytes === 'number') {
+      const n = root.querySelector('#home-sys-note');
+      if (n) n.textContent = `Run files on GitHub are ${gh.state === 'bad' ? 'nearly full' : 'filling up'} (${Math.round(gh.usedBytes / 1024 ** 2)} MB of ${Math.round((gh.freeBytes || 0) / 1024 ** 2)} MB) — this is separate from the video storage above.`;
+    }
     const pill = root.querySelector('#home-sys-pill');
     if (pill) {
       const bad = probs.length > 0;

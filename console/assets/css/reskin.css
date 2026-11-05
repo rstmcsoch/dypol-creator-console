@@ -211,8 +211,8 @@ a { color: var(--accent-700); }
     max-width: none; padding: 27px 31px 32px;
     scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent;
   }
-  .page > * { max-width: 1400px; margin-left: auto; margin-right: auto; }
-  .page > .stack { max-width: 1400px; }
+  /* Content column caps at 1400px and stays centred (padding, so inline margins keep working). */
+  .page { padding-left: max(31px, calc((100% - 1400px) / 2)); padding-right: max(31px, calc((100% - 1400px) / 2)); }
   .toasts { right: 30px; bottom: 30px; }
   /* Desktop density closer to the prototype (phones keep the big v2 sizes). */
   body { font-size: 14px; }
@@ -476,8 +476,7 @@ details.adv > summary::after, details.filters > summary::after, .mini-details > 
 .bulkbar { border-radius: 16px; background: var(--card); }
 details.filters { margin-bottom: 13px; }
 @media (min-width: 1025px) {
-  .segbar { max-width: 560px; margin-left: 0 !important; }
-  .page > .segbar { margin-left: 0; margin-right: auto; }
+  .segbar { max-width: 560px; }
 }
 
 /* ---------- Review drawer ---------- */
