@@ -119,10 +119,14 @@ async function refresh() {
 
   const now = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'long', day: 'numeric', month: 'long' }).format(new Date());
 
+  const pct = capLimit ? Math.min(100, Math.round((capUsed / capLimit) * 100)) : 0;
+  const win = UI_PREFS.windowStart && UI_PREFS.windowEnd ? `${UI_PREFS.windowStart} – ${UI_PREFS.windowEnd} IST` : '';
+  const nextTime = d.nextRun ? String(d.nextRun.label || '') : '';
+
   root.innerHTML = `
     <div class="hello">
-      <h1>${greeting()}</h1>
-      <div class="sub">${esc(now)}</div>
+      <div><h1>${greeting()}</h1>
+      <div class="sub">${esc(now)}</div></div>
     </div>
 
     ${d.demo ? `<div class="callout callout--warn">${icon('info')}<div><strong>Demo mode.</strong> Everything here is pretend data, so you can try things safely.</div></div>` : ''}
@@ -130,50 +134,64 @@ async function refresh() {
     ${(d.engines || []).some((e) => e.connectionState === 'error') ? `<div class="callout callout--danger">${icon('alert')}<div><strong>A video maker can’t be reached right now.</strong> New videos may not start. Details: Settings → Advanced → System status.</div></div>` : ''}
     <div id="home-problems"></div>
 
-    <section class="home-sec">
-      <div class="sec-title">Needs you</div>
-      ${attention.length ? `<div class="stack-sm">${attention.join('')}</div>`
-        : `<div class="attn attn--ok"><div class="attn__icon">${icon('check')}</div><div class="attn__text"><strong>You’re all caught up</strong><span>Nothing needs you right now.</span></div></div>`}
-    </section>
+    <div class="home-grid">
+      <div class="home-main">
+        <section class="home-sec">
+          <div class="sec-title">Needs you</div>
+          ${attention.length ? `<div class="stack-sm">${attention.join('')}</div>`
+            : `<div class="attn attn--ok"><div class="attn__icon">${icon('check')}</div><div class="attn__text"><strong>You’re all caught up</strong><span>Nothing needs you right now.</span></div></div>`}
+        </section>
 
-    <a class="btn btn--primary btn--xl btn--block home-make" href="#/make">${icon('plus')} Make a new video</a>
+        <a class="btn btn--primary btn--xl btn--block home-make" href="#/make">${icon('plus')} Make a new video</a>
 
-    <section class="card uploads">
-      <div class="uploads__row">
-        <div>
-          <div class="uploads__label">Uploads today</div>
-          <div class="uploads__value">${capUsed} of ${capLimit} used · <strong>${capLeft} left</strong></div>
+        <section class="card uploads">
+          <div class="uploads__text">
+            <div class="uploads__label">Uploads today</div>
+            <div class="uploads__value"><b>${capUsed} of ${capLimit} used</b> · ${capLeft} left</div>
+            <div class="field__hint" style="margin-top:6px">You can publish up to ${capLimit} a day. The count resets at 5:30 AM. Videos go up as ${esc((UI_PREFS.visibility || 'unlisted').replace(/^./, (c) => c.toUpperCase()))}.</div>
+          </div>
+          <div class="home-ring" style="--p:${pct}" role="img" aria-label="${capUsed} of ${capLimit} uploads used today"><span>${capUsed} / ${capLimit}</span></div>
+        </section>
+
+        <div class="home-duo">
+          <section class="home-sec">
+            <div class="sec-title">Being made ${making.length ? `<span class="count">${making.length}</span>` : ''}</div>
+            ${making.length ? `<div class="stack-sm">${making.map(makingCard).join('')}</div>`
+              : `<div class="empty-mini">${icon('video')}<span><strong>Nothing is being made right now.</strong><br>Tap Make a new video to start one.</span></div>`}
+          </section>
+
+          <section class="home-sec">
+            <div class="sec-title">Recent videos <a class="sec-link" href="#/videos?tab=all">See all</a></div>
+            ${recent.length ? `<div class="card vlist">${recent.map(videoRow).join('')}</div>`
+              : `<div class="empty-mini">${icon('inbox')}<span><strong>Your finished videos will show up here.</strong></span></div>`}
+          </section>
         </div>
-        <div class="uploads__dots" aria-hidden="true">${Array.from({ length: capLimit }, (_, i) => `<span class="${i < capUsed ? 'is-used' : ''}"></span>`).join('')}</div>
       </div>
-      <div class="field__hint">You can publish up to ${capLimit} a day. The count resets at 5:30 AM. Videos go up as ${esc((UI_PREFS.visibility || 'unlisted').replace(/^./, (c) => c.toUpperCase()))}.</div>
-    </section>
 
-    <section class="home-sec">
-      <div class="sec-title">Being made ${making.length ? `<span class="count">${making.length}</span>` : ''}</div>
-      ${making.length ? `<div class="stack-sm">${making.map(makingCard).join('')}</div>`
-        : `<div class="empty-mini">${icon('video')}<span>Nothing is being made right now. Tap <strong>Make a new video</strong> to start one.</span></div>`}
-    </section>
+      <div class="home-side">
+        <a class="card next-auto" href="#/calendar">
+          <div class="next-auto__head"><span class="eyebrow">Next automatic video</span>
+            ${d.nextRun ? '<span class="pill pill--green">Scheduled</span>' : '<span class="pill pill--gray">Off</span>'}</div>
+          <div class="next-auto__time">${d.nextRun ? esc(nextTime) : 'No automatic videos planned'}</div>
+          <div class="next-auto__line">${icon('clock')}<span>${d.nextRun ? 'Starts by itself. You still check it before it goes up.' : 'Automatic videos are paused or not set up. You can still tap Make.'}</span></div>
+          ${win ? `<div class="next-auto__foot"><span>Upload window</span><strong>${esc(win)}</strong></div>` : ''}
+        </a>
 
-    <section class="home-sec">
-      <div class="sec-title">Recent videos <a class="sec-link" href="#/videos?tab=all">See all</a></div>
-      ${recent.length ? `<div class="card vlist">${recent.map(videoRow).join('')}</div>`
-        : `<div class="empty-mini">${icon('inbox')}<span>Your finished videos will show up here.</span></div>`}
-    </section>
-
-    <a class="card next-auto" href="#/calendar">
-      <div class="vcard__icon">${icon('calendar')}</div>
-      <div class="vcard__text">
-        <div class="vcard__title">${d.nextRun ? `Next automatic video: ${esc(d.nextRun.label)}` : 'No automatic videos planned'}</div>
-        <div class="vcard__meta">${d.nextRun ? 'Starts by itself. You still check it before it goes up.' : 'Automatic videos are paused or not set up. You can still tap Make.'}</div>
+        <section class="card side-status" id="home-sys">
+          <div class="side-status__head"><h2>System status</h2><span class="pill pill--gray" id="home-sys-pill">Checking…</span></div>
+          <div class="mini-metrics">
+            <div class="mini-metric"><strong id="home-sys-store">—</strong><span id="home-sys-store-sub">video storage used</span></div>
+            <div class="mini-metric"><strong id="home-sys-drafts">—</strong><span>drafts stored</span></div>
+          </div>
+          <div class="storage-bar" aria-hidden="true"><span id="home-sys-bar"></span></div>
+          <div class="side-status__note" id="home-sys-note">Limits, storage and connections are checked in the background.</div>
+          <details class="card adv" id="home-status">
+            <summary>${icon('shield', 'icon--sm')} Limits, storage, connections <span class="view-btn">View details ${icon('chevronR', 'icon--sm')}</span></summary>
+            <div class="adv__body">${quotaPanelShell('quota-panel')}</div>
+          </details>
+        </section>
       </div>
-      ${icon('chevronR', 'icon--sm')}
-    </a>
-
-    <details class="card adv" id="home-status">
-      <summary>${icon('shield', 'icon--sm')} System status <span class="muted small">limits, storage, connections</span></summary>
-      <div class="adv__body">${quotaPanelShell('quota-panel')}</div>
-    </details>`;
+    </div>`;
 
   // Live "step x of y" for each video being made.
   for (const j of making.slice(0, 4)) {
@@ -198,9 +216,29 @@ async function refresh() {
   const details = root.querySelector('#home-status');
   details.addEventListener('toggle', () => { if (details.open) mountQuotaPanel(root, 'quota-panel'); }, { once: true });
 
+  // Video storage (same numbers as Settings → Advanced → Video storage).
+  api.get('/api/storage').then((u) => {
+    if (!u || u.configured === false || u.error || typeof u.bytes !== 'number') return;
+    const mb = (b) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(2)} GB` : `${Math.round((b || 0) / 1024 ** 2)} MB`);
+    const pct = u.limitBytes ? Math.min(100, Math.round((u.bytes / u.limitBytes) * 100)) : 0;
+    const setTxt = (id, t) => { const n = root.querySelector(id); if (n) n.textContent = t; };
+    setTxt('#home-sys-store', mb(u.bytes));
+    if (u.limitBytes) setTxt('#home-sys-store-sub', `of ${mb(u.limitBytes)} used`);
+    setTxt('#home-sys-drafts', String(u.drafts?.jobs ?? 0));
+    const bar = root.querySelector('#home-sys-bar');
+    if (bar) bar.style.width = `${pct}%`;
+    setTxt('#home-sys-note', `${pct}% storage used. Drafts are removed after ${u.draftsExpireDays || 30} days; published videos are kept.`);
+  }).catch(() => {});
+
   // Quiet unless something is wrong.
   api.quota().then((q) => {
     const probs = quotaProblems(q);
+    const pill = root.querySelector('#home-sys-pill');
+    if (pill) {
+      const bad = probs.length > 0;
+      pill.className = `pill pill--${bad ? 'amber' : 'green'}`;
+      pill.textContent = bad ? 'Needs a look' : q?.demo ? 'Demo' : 'All good';
+    }
     const el = root.querySelector('#home-problems');
     if (el && probs.length) {
       el.innerHTML = `<div class="callout callout--warn">${icon('alert')}<div><strong>Heads up.</strong> ${probs.map(esc).join(' ')} <a href="#/settings?open=status">See system status</a></div></div>`;

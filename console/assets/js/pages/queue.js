@@ -185,7 +185,7 @@ function detailDrawer(j) {
     ${j.duplicateOf ? `<div class="callout callout--warn">${icon('copy')}<div><strong>This looks like a topic you already made.</strong> ${j.duplicateOf.url ? `<a href="${esc(j.duplicateOf.url)}" target="_blank" rel="noopener">See the earlier video</a>. ` : ''}Publishing will be blocked to avoid a repeat.</div></div>` : ''}
     ${qcIssues.length ? `<div class="callout callout--warn">${icon('alert')}<div><strong>Check this before approving:</strong> ${qcIssues.map(([k, r]) => `${esc(QC_NAMES[k] || k)} (${esc(r.label || r.state)})`).join(', ')}</div></div>` : ''}
 
-    <details class="mini-details tech">
+    <details class="mini-details tech" ${window.matchMedia?.('(min-width: 1025px)').matches ? 'open' : ''}>
       <summary>${icon('info', 'icon--sm')} Details <span class="muted small">checks, files, steps, logs, IDs</span></summary>
       <div class="stack" style="margin-top:10px">
         <dl class="kv">

@@ -13,6 +13,7 @@ import { renderCalendar } from './pages/calendar.js';
 import { renderAnalytics } from './pages/analytics.js';
 import { renderRuns } from './pages/runs.js';
 import { renderSettings } from './pages/settings.js';
+import { initMotion, pageEnter } from './motion.js';
 
 // Main routes (tab bar + sidebar) and Advanced routes (sidebar section + Settings → More tools).
 const ROUTES = [
@@ -98,8 +99,10 @@ async function navigate() {
       <div class="skeleton" style="height:180px"></div>
     </div>`;
   window.scrollTo(0, 0);
+  root.scrollTop = 0; // desktop: the page scrolls inside the main panel
   try {
     await route.render(root, { query, state, refresh });
+    pageEnter(root);
   } catch (err) {
     root.innerHTML = `
       <div class="card"><div class="empty">
@@ -141,6 +144,8 @@ async function loadPrefs() {
     UI_PREFS.engines = s.engines || {};
     UI_PREFS.reviewRequired = !!s.publishing?.reviewRequired;
     UI_PREFS.paused = !!s.schedule?.automationPaused;
+    UI_PREFS.windowStart = s.schedule?.windowStart || '';
+    UI_PREFS.windowEnd = s.schedule?.windowEnd || '';
   } catch { /* keep defaults */ }
 }
 
@@ -240,4 +245,5 @@ document.getElementById('modal-wrap').addEventListener('click', (e) => {
   if (e.target.id === 'modal-wrap' && !document.getElementById('m-ok')) closeModal();
 });
 
+initMotion();
 boot();

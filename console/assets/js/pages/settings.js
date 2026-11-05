@@ -45,6 +45,7 @@ async function refresh() {
         <div class="sub">Everyday settings first. Advanced settings are further down and most people never need them.</div></div>
     </div>
 
+    <div class="set-top">
     <section class="card card--pad safety">
       <div class="safety__title">${icon('shield', 'icon--sm')} Safety rules</div>
       <ul class="safety__list">
@@ -58,7 +59,7 @@ async function refresh() {
       <div class="field__hint">Change these under Advanced → Publishing rules.</div>
     </section>
 
-    <section class="card">
+    <section class="card set-everyday">
       <div class="card__head">${icon('sparkles')}<h2>Everyday settings</h2></div>
       <div class="card__body stack">
         ${sw('s-pause', s.schedule?.automationPaused, 'Pause automatic videos', 'When on, no video starts by itself. You can still tap Make. Nothing is deleted.')}
@@ -73,7 +74,7 @@ async function refresh() {
             ${NICHES.map(([v, l]) => `<option value="${v}" ${s.defaults?.niche === v ? 'selected' : ''}>${l}</option>`).join('')}
           </select>
           <div class="field__hint">Used to pick a topic when you leave the topic empty.</div></div>
-        <div class="field"><span class="field__label">Upload between (India time)</span>
+        <div class="field set-wide"><span class="field__label">Upload between (India time)</span>
           <div class="row" style="gap:10px">
             <input class="input input--lg" type="time" id="s-wstart" aria-label="Upload from" value="${esc(s.schedule?.windowStart || '18:00')}">
             <span class="muted">to</span>
@@ -99,6 +100,7 @@ async function refresh() {
         <a class="link-row" href="#/analytics">${icon('chart', 'icon--sm')}<span><strong>Channel stats</strong><span>Views and watch time (not connected yet)</span></span>${icon('chevronR', 'icon--sm')}</a>
       </div>
     </section>
+    </div>
 
     <div class="sec-title" style="margin-top:22px">Advanced</div>
     <div class="stack-sm">

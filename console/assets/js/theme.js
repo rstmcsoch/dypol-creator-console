@@ -5,7 +5,7 @@
 (function (root) {
   'use strict';
   var KEY = 'dypol-theme';
-  var META = { light: '#FF7100', dark: '#15171B' };
+  var META = { light: '#F5F4EE', dark: '#171715' };
 
   function systemTheme(win) {
     try { return win.matchMedia && win.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }

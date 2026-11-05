@@ -52,6 +52,7 @@ export async function renderMake(root, ctx = {}) {
     ${UI_PREFS.paused ? `<div class="callout callout--warn">${icon('pause')}<div><strong>Automatic videos are paused.</strong> Starting a video by hand may be refused until you turn off “Pause automatic videos” in Settings.</div></div>` : ''}
 
     <form class="make" id="make-form" autocomplete="off">
+      <div class="card make__card">
       <div class="step"><span class="step__n">1</span><div class="step__t">What kind of video?</div></div>
       <div class="kinds" role="radiogroup" aria-label="Kind of video">
         ${kindCard('gemini', enabled.gemini)}
@@ -87,8 +88,9 @@ export async function renderMake(root, ctx = {}) {
       <div class="sticky-cta">
         <button class="btn btn--primary btn--xl btn--block" type="submit" id="mk-go">${icon('play', 'icon--sm')} Start making</button>
       </div>
+      </div>
 
-      <details class="card adv" id="mk-more">
+      <details class="card adv" id="mk-more" ${window.matchMedia?.('(min-width: 1025px)').matches ? 'open' : ''}>
         <summary>${icon('settings2', 'icon--sm')} More ways to make <span class="muted small">for advanced use</span></summary>
         <div class="adv__body stack">
           <div class="field">

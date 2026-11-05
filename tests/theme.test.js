@@ -64,7 +64,7 @@ test('clicking the toggle flips theme, saves it, and updates button + meta', () 
   e.click();
   assert.equal(e.attrs['data-theme'], 'light');
   assert.equal(e.store.v, 'light');
-  assert.equal(e.meta._c, '#FF7100');
+  assert.equal(e.meta._c, e.api.META.light);
 });
 
 test('still switches when storage is blocked (private mode)', () => {
