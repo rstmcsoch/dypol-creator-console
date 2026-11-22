@@ -6,19 +6,58 @@ import { uid, nowIso, topicKey, TZ } from './util.js';
 
 const parse = (s, fallback) => { try { return s ? JSON.parse(s) : fallback; } catch { return fallback; } };
 
+/** Visibility the console last sent to YouTube (from the "Publish dispatched (visibility=…" log line). */
+export function privacyFromLogs(logs) {
+  const list = Array.isArray(logs) ? logs : [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const m = /Publish dispatched \(visibility=(private|unlisted|public)\b/.exec(String((list[i] && list[i].msg) || ''));
+    if (m) return m[1];
+  }
+  return null;
+}
+
+const YT_ID = /^[A-Za-z0-9_-]{6,20}$/;
+const ytIdFromUrl = (u) => {
+  const m = /(?:youtu\.be\/|[?&]v=|\/shorts\/|\/embed\/)([A-Za-z0-9_-]{6,20})/.exec(String(u || ''));
+  return m ? m[1] : null;
+};
+/**
+ * List/detail thumbnail. The jobs.thumbnail column is never written by any
+ * flow (engines put thumbnails in R2 / the run artifacts, not in D1), so the
+ * UI always showed the placeholder. Derive it instead:
+ *  1. an explicit jobs.thumbnail value (kept for the future),
+ *  2. on YouTube → YouTube's own still (i.ytimg.com),
+ *  3. a made draft → the R2 thumbnail via /api/jobs/:id/media?kind=thumb&src=r2
+ *     (R2 only — never the slow GitHub-artifact path; 404 → placeholder).
+ */
+export function thumbFor(r, videos) {
+  if (r.thumbnail) return r.thumbnail;
+  const yt = YT_ID.test(String(r.youtube_id || '')) ? r.youtube_id
+    : ytIdFromUrl(r.youtube_url) || ytIdFromUrl((videos || [])[0]?.youtube_url);
+  if (yt) return `https://i.ytimg.com/vi/${yt}/mqdefault.jpg`;
+  if (r.run_id && r.status !== 'queued') return `/api/jobs/${encodeURIComponent(r.id)}/media?kind=thumb&src=r2`;
+  return null;
+}
+
+/** A thumbnail URL thumbFor() derived (never stored back into D1). */
+export const isDerivedThumb = (u) => /^\/api\/jobs\/[^/]+\/media\?kind=thumb&src=r2$|^https:\/\/i\.ytimg\.com\/vi\//.test(String(u || ''));
+
 export function rowToJob(r) {
+  const videos = parse(r.videos, []);
+  const logs = parse(r.logs, []);
   return {
     id: r.id, engine: r.engine, title: r.title, topic: r.topic,
     niche: r.niche, format: r.format, status: r.status, stage: r.stage,
     progress: r.progress === null || r.progress === undefined ? null : r.progress,
     description: r.description,
-    tags: parse(r.tags, []), durationSec: r.duration_sec, thumbnail: r.thumbnail,
+    tags: parse(r.tags, []), durationSec: r.duration_sec, thumbnail: thumbFor(r, videos),
     createdAt: r.created_at, updatedAt: r.updated_at,
     scheduledFor: r.scheduled_for, publishedAt: r.published_at,
     youtubeId: r.youtube_id, youtubeUrl: r.youtube_url, error: r.error,
     errorCategory: r.error_category || null,
     errorRetryable: r.error_retryable === null || r.error_retryable === undefined ? null : !!r.error_retryable,
-    quality: parse(r.quality, {}), logs: parse(r.logs, []),
+    quality: parse(r.quality, {}), logs,
+    privacy: privacyFromLogs(logs),
     runId: r.run_id,
     parentJobId: r.parent_job_id || null,
     attempt: r.attempt || 1,
@@ -29,7 +68,7 @@ export function rowToJob(r) {
     uploadingSince: r.uploading_since ? Number(r.uploading_since) : null,
     reviewNote: r.review_note || null,
     retryCount: Number(r.retry_count || 0),
-    videos: parse(r.videos, []),
+    videos,
     errorLog: r.error_log || null,
     demo: false,
   };
@@ -90,7 +129,7 @@ export async function insertJob(db, job) {
     .bind(
       job.id, job.engine, job.title, job.topic, await topicKey(job.title),
       job.niche, job.format, job.status, job.stage, job.progress,
-      job.description, JSON.stringify(job.tags || []), job.durationSec, job.thumbnail,
+      job.description, JSON.stringify(job.tags || []), job.durationSec, isDerivedThumb(job.thumbnail) ? null : (job.thumbnail ?? null),
       job.createdAt, job.updatedAt, job.scheduledFor, job.publishedAt,
       job.youtubeId, job.youtubeUrl, job.error,
       job.errorCategory || null,
@@ -115,6 +154,7 @@ export async function updateJob(db, id, patch) {
   };
   const sets = [], args = [];
   for (const [k, col] of Object.entries(map)) {
+    if (k === 'thumbnail' && isDerivedThumb(patch[k])) continue;
     if (patch[k] !== undefined) { sets.push(`${col} = ?`); args.push(patch[k]); }
   }
   if (patch.errorRetryable !== undefined) { sets.push('error_retryable = ?'); args.push(patch.errorRetryable ? 1 : 0); }

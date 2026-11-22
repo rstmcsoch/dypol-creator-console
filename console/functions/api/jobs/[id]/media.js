@@ -120,6 +120,14 @@ export async function onRequestGet(context) {
       if (res) return res;
     }
   }
+  // List thumbnails (?src=r2): no stored thumbnail → the HLS poster frame; never the
+  // slow GitHub-artifact path (a list of 30 would hammer the API). 404 → the UI placeholder.
+  if (kind === 'thumb' && params.get('src') === 'r2') {
+    const key = posterKey(manifest, job);
+    const res = key && await streamR2(context.env, key, context.request, { source: 'r2-poster' });
+    if (res) return res;
+    return json(null, 404, { error: 'No thumbnail stored for this video.', code: 'no-media' });
+  }
   if (kind === 'sprite' || kind === 'captions') return json(null, 404, { error: `No ${kind} stored for this video.`, code: 'no-media' });
   const settings = await getSettings(db);
   const slug = settings.github[job.engine]?.repo;
@@ -173,6 +181,20 @@ export async function onRequestGet(context) {
     return new Response(entry.bytes, { headers });
   }
   return json(null, 404, { error: `No ${kind} found in this run's artifacts.`, code: 'no-media' });
+}
+
+/** R2 key of the HLS poster frame (main video first), or null. */
+export function posterKey(manifest, job) {
+  const hls = manifest?.hls || {};
+  const main = mainOf(job, manifest);
+  for (const k of [main, main === 'long' ? 'short' : 'long']) {
+    const e = hls[k];
+    const base = String(e?.base || '');
+    if (e?.poster && /^drafts\/[A-Za-z0-9._-]{1,100}\/hls\/[A-Za-z0-9_-]{1,40}\/(long|short)\/$/.test(base) && base.startsWith(`drafts/${job.id}/`)) {
+      return `${base}poster.jpg`;
+    }
+  }
+  return null;
 }
 
 const mainOf = (job, manifest) => (job.engine === 'verticals' || (!manifest?.files?.long && manifest?.files?.short) ? 'short' : 'long');

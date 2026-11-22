@@ -761,3 +761,38 @@ details[open] > summary ~ * { animation: fold-in var(--dur-med) var(--ease-out);
 @media (max-width: 480px) {
   .upload-opts .foot-row .btn { padding-inline: 8px; font-size: 13px; }
 }
+
+/* ---------- "Upload to YouTube" row (review popup, under the player) ---------- */
+.upload-row {
+  display: flex; flex-direction: column; gap: 12px;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 16px; padding: 14px 16px; margin: 12px 0;
+}
+.upload-row__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.upload-row__now { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
+.upload-row__why { margin: 0; }
+.seg-up { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.seg-up__btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 48px; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--border); background: var(--card); color: var(--ink);
+  font: inherit; font-size: 15px; font-weight: 650; cursor: pointer;
+  transition: background var(--dur-med, .2s) var(--ease-out, ease), border-color var(--dur-med, .2s) var(--ease-out, ease);
+}
+.seg-up__btn:hover:not(:disabled),
+.seg-up__btn:focus-visible:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+.seg-up__btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.seg-up__btn.is-current { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+.upload-row.is-off .seg-up__btn,
+.seg-up__btn:disabled { opacity: .5; cursor: not-allowed; filter: grayscale(.4); }
+@media (max-width: 480px) {
+  .drawer.drawer--popup {
+    top: 0; left: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none;
+    border-radius: 0; overflow-y: auto;
+  }
+  .drawer.drawer--popup .rp-skel--short,
+  .drawer.drawer--popup .rp--short .rp__stage,
+  .drawer.drawer--popup .player--short { height: min(46dvh, 640px); max-height: 46dvh; }
+  body.popup-open .tabbar { display: none; }
+  .seg-up__btn { padding-inline: 6px; font-size: 14px; }
+}

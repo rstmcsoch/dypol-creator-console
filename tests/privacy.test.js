@@ -198,11 +198,26 @@ test('review sheet is a centred popup; the technical-history drawer stays a side
   assert.match(html, /id="drawer-close"/);
 });
 
-test('review sheet offers three upload options, each behind a confirm; Public needs PUBLISH typed', () => {
+test('review popup has an "Upload to YouTube" row under the player (no old footer buttons); each choice confirms, Public needs PUBLISH', () => {
   const q = read('assets/js/pages/queue.js');
-  for (const [ps, label] of [['private', 'Upload private'], ['unlisted', 'Upload unlisted'], ['public', 'Publish public']]) {
-    assert.match(q, new RegExp(`uploadBtn\\('${ps}', '${label}'`));
-  }
+  assert.ok(!/uploadBtn\(/.test(q), 'old footer upload buttons are gone');
+  assert.ok(!/upload-opts/.test(q), 'old footer upload group is gone');
+  assert.match(q, /import \{ uploadRowState, UPLOAD_CHOICES, PRIVACY_WORD \} from '\.\.\/uploadrow\.js'/);
+  assert.match(q, /class="upload-row\$\{st\.allowed \? '' : ' is-off'\}" id="upload-row"/);
+  assert.match(q, /upload-row__head/);
+  assert.match(q, /upload-row__now/);
+  assert.match(q, /upload-row__why/);
+  assert.match(q, /class="seg-up" role="group" aria-label="Upload to YouTube as"/);
+  assert.match(q, /data-jact="upload" data-privacy="\$\{ps\}"/);
+  // Row sits right under the player, before the progress block.
+  const body = q.slice(q.indexOf('function detailDrawer'));
+  assert.ok(body.indexOf('${uploadRow(upState)}') > body.indexOf('id="review-player"'), 'row comes after the player');
+  assert.ok(body.indexOf('${uploadRow(upState)}') < body.indexOf('id="job-progress"'), 'row comes before progress');
+  // Footer no longer handles upload; the row does, through the same confirm flow.
+  const footHandler = q.slice(q.indexOf("document.getElementById('drawer-foot').onclick"));
+  assert.ok(!/action === 'upload'/.test(footHandler.slice(0, footHandler.indexOf('let payload'))));
+  assert.match(q, /getElementById\('upload-row'\)\?\.addEventListener\('click'/);
+  assert.match(q, /uploadWithPrivacy\(j, b, \{ canApprove: upState\.mode === 'approve' \}\)/);
   const fn = q.slice(q.indexOf('async function uploadWithPrivacy'), q.indexOf('/** Second, explicit confirm'));
   assert.match(fn, /fixesConfirm\(j\)/, 'needs-fixes confirm still first');
   assert.match(fn, /privacyConfirm\(/);
@@ -215,6 +230,57 @@ test('review sheet offers three upload options, each behind a confirm; Public ne
   assert.match(q, /btn\('approve', 'Approve & publish'/);
   assert.match(q, /btn\('regenerate', 'Redo'/);
   assert.match(q, /btn\('reject', 'Reject'/);
+  // Phone: body.popup-open while the popup is open.
+  assert.match(q, /classList\.toggle\('popup-open'/);
+  // Styles.
+  const css = read('assets/css/reskin.css');
+  assert.match(css, /\.upload-row \{[^}]*gap: 12px/);
+  assert.match(css, /\.seg-up \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(css, /\.seg-up__btn \{[^}]*min-height: 48px/);
+  assert.match(css, /\.upload-row\.is-off \.seg-up__btn/);
+  const m480 = css.slice(css.lastIndexOf('@media (max-width: 480px)'));
+  assert.match(m480, /width: 100vw; height: 100dvh/);
+  assert.match(m480, /overflow-y: auto/);
+  assert.match(m480, /46dvh/);
+  assert.match(m480, /body\.popup-open \.tabbar \{ display: none; \}/);
+});
+
+test('uploadRowState over statuses', async () => {
+  const { uploadRowState, UPLOAD_CHOICES, privacyFromLogs } = await import(`${ROOT}assets/js/uploadrow.js`);
+  assert.deepEqual(UPLOAD_CHOICES.map((c) => c[0]), ['private', 'unlisted', 'public']);
+  // Ideas: hidden.
+  assert.equal(uploadRowState({ status: 'queued' }).show, false);
+  assert.equal(uploadRowState(null).show, false);
+  // Waiting for review: allowed, approve mode.
+  for (const status of ['awaiting-review', 'needs-review']) {
+    const s = uploadRowState({ status });
+    assert.equal(s.show, true); assert.equal(s.allowed, true); assert.equal(s.mode, 'approve'); assert.equal(s.reason, '');
+  }
+  // Approved / scheduled: allowed (publish) unless a real blocker.
+  assert.equal(uploadRowState({ status: 'approved' }).allowed, true);
+  assert.equal(uploadRowState({ status: 'scheduled' }).mode, 'publish');
+  const blocked = uploadRowState({ status: 'approved' }, { realBlock: 'Daily cap reached' });
+  assert.equal(blocked.allowed, false); assert.equal(blocked.reason, 'Daily cap reached');
+  // Being made: visible, disabled, says so.
+  for (const status of ['dispatched', 'running', 'generating', 'rendering']) {
+    const s = uploadRowState({ status });
+    assert.equal(s.show, true); assert.equal(s.allowed, false);
+    assert.match(s.reason, /^Being made/);
+  }
+  // Published: disabled, shows the current visibility.
+  const p = uploadRowState({ status: 'published', privacy: 'unlisted', youtubeUrl: 'https://youtu.be/x' });
+  assert.equal(p.allowed, false); assert.equal(p.onYouTube, true); assert.equal(p.current, 'unlisted');
+  assert.match(p.reason, /Already on YouTube/);
+  assert.equal(uploadRowState({ status: 'published' }).current, null, 'unknown visibility → none shown');
+  // Other states: disabled with a reason.
+  for (const status of ['uploading', 'publish_failed', 'rejected', 'failed', 'cancelled', 'superseded', 'weird']) {
+    const s = uploadRowState({ status });
+    assert.equal(s.allowed, false); assert.ok(s.reason.length > 0, status);
+  }
+  assert.match(uploadRowState({ status: 'needs-review', demo: true }).reason, /Demo/);
+  assert.equal(uploadRowState({ status: 'needs-review', deletion: { state: 'x' } }).allowed, false);
+  assert.equal(privacyFromLogs([{ msg: 'Publish dispatched (visibility=private)' }, { msg: 'Publish dispatched (visibility=public)' }]), 'public');
+  assert.equal(privacyFromLogs([]), null);
 });
 
 /* ---------------- dev server mirror ---------------- */

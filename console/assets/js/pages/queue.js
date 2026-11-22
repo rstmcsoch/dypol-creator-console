@@ -14,6 +14,7 @@ import {
 import { mountProgress, progressLine, fetchProgress } from '../progress.js';
 import { deleteVideos, runDeletes } from '../delete.js';
 import { mountPlayer, getNotes, notesToReason, warmPlayer } from '../player.js';
+import { uploadRowState, UPLOAD_CHOICES, PRIVACY_WORD } from '../uploadrow.js';
 
 // Every job state belongs to exactly one chip, so the chips add up to "All".
 const STATUS_TABS = [
@@ -130,6 +131,43 @@ function stateBanner(j, retriesLeft) {
   return `<div class="state state--${i.tone}">${icon(ic)}<div><strong>${esc(i.label)}</strong><span>${esc(next)}</span></div></div>`;
 }
 
+/**
+ * "Upload to YouTube" row — top of the review popup, right under the player.
+ * Three big segmented buttons (Private / Unlisted / Public), each with its own
+ * confirm (Public needs PUBLISH typed; the server checks it too). Disabled with
+ * the reason when they can't be used; shows the current visibility on YouTube.
+ */
+function uploadRow(st) {
+  if (!st.show) return '';
+  const now = st.onYouTube ? `<span class="upload-row__now">${icon('check', 'icon--sm')} On YouTube${st.current ? ` · <strong>${esc(PRIVACY_WORD[st.current])}</strong>` : ''}</span>` : '';
+  const btns = UPLOAD_CHOICES.map(([ps, label, ic]) =>
+    `<button type="button" class="seg-up__btn seg-up__btn--${ps}${st.current === ps ? ' is-current' : ''}" data-jact="upload" data-privacy="${ps}"`
+    + `${st.allowed ? '' : ` disabled aria-disabled="true" data-why="${esc(st.reason)}"`}${st.current === ps ? ' aria-current="true"' : ''}>`
+    + `${icon(ic, 'icon--sm')}<span>${label}</span></button>`).join('');
+  return `<section class="upload-row${st.allowed ? '' : ' is-off'}" id="upload-row" aria-labelledby="upload-row-h">
+      <div class="upload-row__head"><strong id="upload-row-h">Upload to YouTube</strong>${now}</div>
+      <div class="seg-up" role="group" aria-label="Upload to YouTube as">${btns}</div>
+      <div class="tiny upload-row__why${st.allowed ? ' muted' : ''}">${st.allowed ? 'Each choice asks you to confirm first. Public needs you to type PUBLISH.' : esc(st.reason)}</div>
+    </section>`;
+}
+
+/**
+ * body.popup-open while the review popup is open (phones hide the tab bar).
+ * Set here on open; cleared by watching the drawer, since Esc / scrim / ✕ /
+ * actions all close it through closeDrawer().
+ */
+let popupWatch = null;
+function trackPopupOpen() {
+  const drawer = document.getElementById('drawer');
+  const sync = () => document.body.classList.toggle('popup-open',
+    drawer.classList.contains('is-open') && drawer.classList.contains('drawer--popup'));
+  sync();
+  if (!popupWatch && typeof MutationObserver !== 'undefined') {
+    popupWatch = new MutationObserver(sync);
+    popupWatch.observe(drawer, { attributes: true, attributeFilter: ['class'] });
+  }
+}
+
 function detailDrawer(j) {
   const canApprove = ['needs-review', 'awaiting-review'].includes(j.status);
   const canPublish = ['approved', 'scheduled'].includes(j.status);
@@ -140,6 +178,7 @@ function detailDrawer(j) {
   const blocked = canPublish || canApprove ? j.publishBlocked : null;
   // A video that is simply waiting for review is not "blocked" — only show real blockers.
   const realBlock = blocked && !/review|approve the video/i.test(blocked) ? blocked : null;
+  const upState = uploadRowState(j, { realBlock: canPublish ? realBlock : null });
   const why = {
     reject: REJECTABLE.includes(j.status) ? '' : j.status === 'uploading' ? 'It is uploading right now.' : `A video that is “${statusInfo(j.status).label}” can’t be rejected.`,
     approve: canApprove ? '' : 'Only videos waiting for your check can be approved.',
@@ -168,6 +207,7 @@ function detailDrawer(j) {
     ${hasRun ? `<div class="media-review" id="review-player" data-job="${esc(j.id)}">
       <div class="rp-skel ${j.format === 'short' ? 'rp-skel--short' : ''}"><span class="tiny muted">Loading the player…</span></div>
     </div>` : `<div class="player-ph">${thumb(j, true)}<div class="tiny muted">${j.demo ? 'Demo video — no real preview.' : 'The preview appears here when the video is ready.'}</div></div>`}
+    ${uploadRow(upState)}
     ${j.demo ? '' : '<div id="job-progress" aria-live="polite"></div>'}
 
     <section class="sheet-sec">
@@ -255,22 +295,14 @@ function detailDrawer(j) {
     why.regenerate ? '' : btn('regenerate', 'Redo', 'refresh'),
     isIdea ? `<button class="btn btn--danger" data-jact="cancel">${icon('x', 'icon--sm')} Remove idea</button>` : REJECTABLE.includes(j.status) ? btn('reject', 'Reject', 'x', 'btn--danger') : '',
   ].filter(Boolean).join('');
-  // Per-click upload options (review sheet): each opens its own confirm; Public needs PUBLISH typed.
-  const uploadWhy = canApprove ? why.approve : why.publish;
-  const uploadBtn = (ps, label, ic, cls) =>
-    `<button class="btn ${cls}" data-jact="upload" data-privacy="${ps}" ${disabledAttr(uploadWhy)}>${icon(ic, 'icon--sm')} ${label}</button>`;
-  const uploadOpts = canApprove || canPublish
-    ? `<div class="upload-opts" role="group" aria-label="Upload options">
-        <span class="tiny muted upload-opts__label">Or choose how it goes up:</span>
-        <div class="foot-row">${uploadBtn('private', 'Upload private', 'lock', 'btn--secondary')}${uploadBtn('unlisted', 'Upload unlisted', 'eye', 'btn--secondary')}${uploadBtn('public', 'Publish public', 'upload', 'btn--warnline')}</div>
-      </div>`
-    : '';
+  // Per-click upload options live in the "Upload to YouTube" row under the player (uploadRow).
   const foot = j.status === 'published'
     ? `<div class="foot-stack">${videoLinks(j, true) || '<span class="small muted">On YouTube.</span>'}</div>`
-    : `<div class="foot-stack">${primary}${uploadOpts}${secondary ? `<div class="foot-row">${secondary}</div>` : ''}</div>`;
+    : `<div class="foot-stack">${primary}${secondary ? `<div class="foot-row">${secondary}</div>` : ''}</div>`;
 
   openDrawer({ title: canApprove ? 'Check this video' : 'Video', body, foot, kind: 'review' });
   document.getElementById('drawer').dataset.kind = 'review';
+  trackPopupOpen();
   mountProgress(document.getElementById('job-progress'), `/api/jobs/${encodeURIComponent(j.id)}/progress`, {
     showWhenDone: false,
     onDone: (p) => {
@@ -357,11 +389,19 @@ function detailDrawer(j) {
     };
   });
 
+  // Upload row (in the body, under the player): same confirm flows as before.
+  document.getElementById('upload-row')?.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-jact="upload"]');
+    if (!b) return;
+    if (b.disabled || b.getAttribute('aria-disabled') === 'true') { if (b.dataset.why) toast('Can’t upload', b.dataset.why, 'warn'); return; }
+    if (!upState.allowed) return;
+    await uploadWithPrivacy(j, b, { canApprove: upState.mode === 'approve' });
+  });
+
   document.getElementById('drawer-foot').onclick = async (e) => {
     const b = e.target.closest('[data-jact]');
     if (!b || b.disabled || b.getAttribute('aria-disabled') === 'true') return;
     const action = b.dataset.jact;
-    if (action === 'upload') { await uploadWithPrivacy(j, b, { canApprove }); return; }
     let payload = {};
     if (action === 'reject') {
       const notesText = notesToReason(getNotes(j.id));

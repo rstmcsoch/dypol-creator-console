@@ -410,10 +410,23 @@ export const emptyState = (iconName, title, message, actionHtml = '') => `
 export const thumb = (job, big = false) => {
   const dur = job.durationSec ? fmtSecs(job.durationSec) : '';
   const inner = job.thumbnail
-    ? `<img src="${esc(job.thumbnail)}" alt="" loading="lazy">`
+    ? `<img src="${esc(job.thumbnail)}" alt="" loading="lazy" decoding="async">`
     : `<div class="thumb__ph">${icon('image', 'icon--sm')}</div>`;
   return `<div class="thumb ${big ? 'thumb--lg' : ''}">${inner}${dur ? `<span class="thumb__dur">${esc(dur)}</span>` : ''}</div>`;
 };
+
+// A thumbnail that fails to load (no stored thumbnail yet, expired draft) falls
+// back to the placeholder icon instead of a broken image.
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('error', (e) => {
+    const t = e.target;
+    if (!t || t.tagName !== 'IMG' || !t.parentElement || !t.parentElement.classList.contains('thumb')) return;
+    const ph = document.createElement('div');
+    ph.className = 'thumb__ph';
+    ph.innerHTML = icon('image', 'icon--sm');
+    t.replaceWith(ph);
+  }, true);
+}
 
 export const qcRow = (name, res) => {
   const state = res?.state || 'skipped';
