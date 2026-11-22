@@ -1,6 +1,7 @@
 import { json, readBody, TZ } from './_lib/util.js';
 import { getSettings, saveSettings } from './_lib/db.js';
 import { checkToken, setRepoVariable, getRepoVariable } from './_lib/github.js';
+import { clampRetentionCount } from './_lib/retention.js';
 import { validateVoice, validateDesignPattern, sanitizeCustomVoices } from './_lib/voices.js';
 
 /** Engine repos whose Actions variables carry the default voice / pattern. */
@@ -161,6 +162,10 @@ export async function onRequestPut(context) {
     engines: merge(current.engines, body.engines),
     defaults: merge(current.defaults, defaultsIn),
     schedule: merge(current.schedule, body.schedule),
+    retention: {
+      keepLatest: body.retention?.keepLatest !== undefined ? body.retention.keepLatest !== false : current.retention?.keepLatest !== false,
+      count: clampRetentionCount(body.retention?.count, clampRetentionCount(current.retention?.count)),
+    },
     ...(body.customVoices !== undefined ? { customVoices } : {}),
   });
 

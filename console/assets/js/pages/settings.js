@@ -88,6 +88,11 @@ async function refresh(engineNotice = '') {
         <div class="field"><label class="field__label" for="s-cap">Uploads per day</label>
           <input class="input input--lg" type="number" min="1" max="10" id="s-cap" value="${esc(String(P.dailyCap ?? 2))}">
           <div class="field__hint">Hard limit — extra uploads are blocked. The count resets at 5:30 AM. Keep it at 2.</div></div>
+        <div class="field set-wide">
+          ${sw('s-keep', s.retention?.keepLatest !== false, 'Keep only the latest videos', 'Older videos are removed from the console after a new one is ready to check, like tapping Delete. Nothing is ever removed from YouTube. Videos being made or uploaded are never touched.', 'Keep only the latest videos')}</div>
+        <div class="field"><label class="field__label" for="s-keep-n">How many videos to keep</label>
+          <input class="input input--lg" type="number" min="3" max="50" id="s-keep-n" value="${esc(String(s.retention?.count ?? 8))}">
+          <div class="field__hint">At least 3. Default 8.</div></div>
         <div class="field"><label class="field__label" for="s-lang">Language of new videos</label>
           <select class="select select--lg" id="s-lang">
             ${LANGS.map(([v, l]) => `<option value="${v}" ${s.defaults?.language === v ? 'selected' : ''}>${l}</option>`).join('')}
@@ -289,7 +294,7 @@ async function refresh(engineNotice = '') {
     const el = root.querySelector(id);
     if (el) el.onclick = () => { el.classList.toggle('is-on'); el.setAttribute('aria-checked', String(el.classList.contains('is-on'))); dirty(); };
   };
-  ['#s-review', '#s-auto', '#s-dedupe', '#s-lock', '#s-pause', '#s-draft', '#s-eng-gemini', '#s-eng-verticals'].forEach(toggle);
+  ['#s-review', '#s-auto', '#s-dedupe', '#s-lock', '#s-pause', '#s-draft', '#s-keep', '#s-eng-gemini', '#s-eng-verticals'].forEach(toggle);
 
   root.querySelector('#btn-save').onclick = async (e) => {
     const btn = e.currentTarget; btn.disabled = true;
@@ -325,6 +330,7 @@ async function refresh(engineNotice = '') {
           frequency: val('#s-freq'), windowStart: val('#s-wstart'), windowEnd: val('#s-wend'),
           automationPaused: on('#s-pause'),
         },
+        retention: { keepLatest: on('#s-keep'), count: Math.max(3, Number(val('#s-keep-n')) || 8) },
       });
       const notice = res?.engineSync && !res.engineSync.ok ? (res.engineSync.notice || '') : '';
       toast('Saved', notice || 'Your settings are updated.', notice ? 'warn' : 'ok', notice ? 8000 : undefined);

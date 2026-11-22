@@ -11,6 +11,7 @@
 import { json } from '../_lib/util.js';
 import { verifySignature, processEvent } from '../_lib/webhook.js';
 import { sweepPublished, hasR2 } from '../_lib/r2.js';
+import { pruneInBackground } from '../_lib/retention.js';
 
 const MAX_BODY = 2 * 1024 * 1024; // GitHub caps payloads at 25 MB; ours are small.
 
@@ -36,6 +37,8 @@ export async function onRequestPost(context) {
     if (hasR2(env) && event === 'workflow_run' && payload?.action === 'completed' && typeof context.waitUntil === 'function') {
       context.waitUntil(sweepPublished(env, env.DB).catch(() => {}));
     }
+    // Keep only the latest videos: prune older ones once a video reaches review.
+    if (body?.job === 'needs-review') pruneInBackground(context);
     return json(null, status, body);
   } catch (err) {
     // 500 lets GitHub show the failure in Recent Deliveries (redeliverable).

@@ -306,6 +306,8 @@ export const DEFAULT_SETTINGS = {
     timezone: TZ, frequency: 'daily', windowStart: '18:00', windowEnd: '21:00',
     automationPaused: false,
   },
+  // Keep only the latest videos (older ones removed like a manual Delete; never from YouTube).
+  retention: { keepLatest: true, count: 8 },
 };
 
 export async function getSettings(db) {

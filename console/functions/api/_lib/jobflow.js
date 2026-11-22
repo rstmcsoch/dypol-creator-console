@@ -422,7 +422,12 @@ export function backgroundReconcile(context, settings) {
   if (!env?.GITHUB_TOKEN || !env.DB) return;
   const p = (async () => {
     const s = settings || (await (await import('./db.js')).getSettings(env.DB));
-    await reconcileJobs(env.DB, env, s);
+    const rec = await reconcileJobs(env.DB, env, s);
+    // Keep only the latest videos: prune once a video reached review here.
+    if ((rec?.changes || []).some((c) => String(c).endsWith(': needs-review'))) {
+      const { pruneOldJobs } = await import('./retention.js');
+      await pruneOldJobs(env.DB, env, s);
+    }
   })().catch(() => {});
   if (typeof context.waitUntil === 'function') context.waitUntil(p);
   return p;
