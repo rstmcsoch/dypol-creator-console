@@ -97,7 +97,7 @@ function dayList(jobs) {
 }
 
 async function refresh() {
-  const root = document.getElementById('page-root');
+  const root = (document.querySelector('#page-root > .page-holder') || document.getElementById('page-root'));
   const data = await api.calendar(ym(cursor));
   const jobs = (data.jobs || []).filter((j) => !engineFilter || j.engine === engineFilter);
 

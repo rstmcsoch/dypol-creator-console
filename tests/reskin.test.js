@@ -37,5 +37,16 @@ test('motion: one delegated ripple listener, page enter, both wired in app.js', 
   assert.match(m, /prefers-reduced-motion/);
   const app = read('assets/js/app.js');
   assert.match(app, /initMotion\(\);/);
-  assert.match(app, /pageEnter\(root\)/);
+  assert.match(app, /pageEnter\(pageRoot\)/);
+});
+
+test('navigation: a slower, older page render never paints over a newer page', () => {
+  const app = readFileSync(new URL('../console/assets/js/app.js', import.meta.url), 'utf8');
+  assert.match(app, /const seq = \+\+navSeq/);
+  assert.match(app, /if \(seq !== navSeq\) return;/);
+  assert.match(app, /pageRoot\.replaceChildren\(root\)/);
+  for (const f of ['overview', 'settings', 'queue', 'calendar', 'runs', 'pipelines', 'analytics']) {
+    const src = readFileSync(new URL(`../console/assets/js/pages/${f}.js`, import.meta.url), 'utf8');
+    assert.match(src, /#page-root > \.page-holder/, f);
+  }
 });

@@ -68,7 +68,7 @@ function videoRow(j) {
 }
 
 async function refresh() {
-  const root = document.getElementById('page-root');
+  const root = (document.querySelector('#page-root > .page-holder') || document.getElementById('page-root'));
   const [d, list] = await Promise.all([api.overview(), api.jobs('?sort=newest').catch(() => ({ jobs: [], counts: {} }))]);
   const jobs = list.jobs || [];
   const toCheck = jobs.filter((j) => CHECK.includes(j.status));

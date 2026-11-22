@@ -160,7 +160,7 @@ function enginePanel(e) {
 }
 
 async function refresh() {
-  const root = document.getElementById('page-root');
+  const root = (document.querySelector('#page-root > .page-holder') || document.getElementById('page-root'));
   const query = new URLSearchParams(location.hash.split('?')[1] || '');
   const d = await api.engines();
 

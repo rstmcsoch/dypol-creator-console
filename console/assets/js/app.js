@@ -81,7 +81,10 @@ function routeInfo() {
   return { route, query: new URLSearchParams(query) };
 }
 
+let navSeq = 0; // each navigation gets a number; a slower, older render must never paint over a newer page
+
 async function navigate() {
+  const seq = ++navSeq;
   const { route, query } = routeInfo();
   state.route = route.id;
   renderNav();
@@ -91,7 +94,13 @@ async function navigate() {
   document.body.dataset.route = route.id;
   closeDrawer();
   closeModal();
-  const root = document.getElementById('page-root');
+  const pageRoot = document.getElementById('page-root');
+  // Render into a fresh holder owned by this navigation. If the user moves on
+  // before it finishes, the holder is already detached and its late output is
+  // never seen (this was the "Make jumps back to Good evening" bug).
+  const root = document.createElement('div');
+  root.className = 'page-holder';
+  pageRoot.replaceChildren(root);
   root.innerHTML = `
     <div class="stack">
       <div class="skeleton skeleton--line" style="width:200px;height:24px"></div>
@@ -100,11 +109,13 @@ async function navigate() {
       <div class="skeleton" style="height:180px"></div>
     </div>`;
   window.scrollTo(0, 0);
-  root.scrollTop = 0; // desktop: the page scrolls inside the main panel
+  pageRoot.scrollTop = 0; // desktop: the page scrolls inside the main panel
   try {
     await route.render(root, { query, state, refresh });
-    pageEnter(root);
+    if (seq !== navSeq) return;
+    pageEnter(pageRoot);
   } catch (err) {
+    if (seq !== navSeq) return;
     root.innerHTML = `
       <div class="card"><div class="empty">
         <div class="empty__icon">${icon('alert')}</div>

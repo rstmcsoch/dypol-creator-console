@@ -198,16 +198,19 @@ test('Settings: defaults + customVoices validated; engine variables PATCHed', as
   assert.equal(body.engineSync.ok, true);
   const patches = calls.filter((c) => c.method === 'PATCH');
   assert.deepEqual(patches.map((c) => c.url.replace('https://api.github.com', '')).sort(), [
-    '/repos/rstmcsoch/gemini-youtube-automation/actions/variables/DYPOL_DEFAULT_PATTERN',
     '/repos/rstmcsoch/gemini-youtube-automation/actions/variables/DYPOL_DEFAULT_VOICE',
-    '/repos/rstmcsoch/youtube-shorts-pipeline/actions/variables/DYPOL_DEFAULT_PATTERN',
     '/repos/rstmcsoch/youtube-shorts-pipeline/actions/variables/DYPOL_DEFAULT_VOICE',
-  ]);
+  ]); // pattern unchanged from its default, so it is not pushed
   assert.equal(patches.find((c) => c.url.endsWith('DYPOL_DEFAULT_VOICE')).body.value, 'jf_alpha');
   const s = await dbm.getSettings(env.DB);
   assert.equal(s.defaults.voice, 'jf_alpha');
   assert.equal(s.defaults.designPattern, 'elements');
   assert.deepEqual(s.customVoices, [{ id: 'jf_alpha', label: 'Alpha' }]);
+
+  // Saving another setting must not touch the engines.
+  calls.length = 0;
+  await settingsApi.onRequestPut(ctx(env, {}, { publishing: { dailyCap: 2 } }, 'PUT'));
+  assert.equal(calls.filter((c) => c.method === 'PATCH').length, 0);
 
   // Same values again: already synced, no GitHub calls.
   calls.length = 0;
@@ -224,14 +227,14 @@ test('Settings: a refused variable write keeps the save and returns the notice',
   const body = await res.json();
   assert.equal(body.ok, true);
   assert.equal(body.engineSync.ok, false);
-  assert.equal(body.engineSync.notice, 'Saved in console; engines still use am_michael');
+  assert.match(body.engineSync.notice, /couldn't be updated.*am_michael/);
   assert.equal((await dbm.getSettings(env.DB)).defaults.voice, 'bf_emma');
 
   // Variable missing (404 on PATCH) → created with POST.
   const env2 = await makeEnv();
   routes.length = 0; calls.length = 0;
   route('POST', '/actions/variables', { status: 201, body: {} });
-  const r2 = await settingsApi.onRequestPut(ctx(env2, {}, { defaults: { designPattern: 'elements' } }, 'PUT'));
+  const r2 = await settingsApi.onRequestPut(ctx(env2, {}, { defaults: { voice: 'bf_emma' } }, 'PUT'));
   assert.equal((await r2.json()).engineSync.ok, true);
   assert.equal(calls.filter((c) => c.method === 'POST').length, 2);
 });

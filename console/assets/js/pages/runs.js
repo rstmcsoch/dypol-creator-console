@@ -73,7 +73,7 @@ function runDrawer(r) {
 }
 
 async function refresh() {
-  const root = document.getElementById('page-root');
+  const root = (document.querySelector('#page-root > .page-holder') || document.getElementById('page-root'));
   const data = await api.runs();
   const runs = data.runs || [];
 

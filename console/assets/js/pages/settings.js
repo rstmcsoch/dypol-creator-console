@@ -30,7 +30,7 @@ const group = (id, ic, title, sub, inner, open = false) => `
   </details>`;
 
 async function refresh(engineNotice = '') {
-  const root = document.getElementById('page-root');
+  const root = (document.querySelector('#page-root > .page-holder') || document.getElementById('page-root'));
   const [s, voices] = await Promise.all([api.settings(), loadVoices()]);
   const customVoices = Array.isArray(s.customVoices) ? s.customVoices : [];
   const defVoice = s.defaults?.voice || DEFAULT_VOICE;

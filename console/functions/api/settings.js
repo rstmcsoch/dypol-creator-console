@@ -38,11 +38,12 @@ export async function syncEngineDefaults(token, wanted) {
   for (const [name, r] of failed) {
     let current = null;
     if (token) { try { current = await getRepoVariable(token, { ...r, name }); } catch { current = null; } }
-    still.push(current || 'their own default');
+    if (current && !still.includes(current)) still.push(current);
   }
+  const what = [...failed.keys()].map((n) => (n === VOICE_VARIABLE ? 'voice' : 'design pattern')).join(' and ');
   return {
     ok: false, confirmed, failed: [...failed.keys()],
-    notice: `Saved in console; engines still use ${still.join(' · ')}`,
+    notice: `Saved. The video makers couldn't be updated, so they keep their current default ${what}${still.length ? ` (${still.join(', ')})` : ''}. You can still pick it per video on the Make page.`,
   };
 }
 
@@ -171,9 +172,12 @@ export async function onRequestPut(context) {
 
   // Push a changed default voice / pattern to the engines (best effort).
   const synced = current.engineSync || {};
+  // Only when the owner actually changed it in this save — saving any other
+  // setting must not retry (and re-warn about) an earlier engine sync.
+  const before = current.defaults || {};
   const wanted = {
-    voice: defaultsIn.voice && defaultsIn.voice !== synced.voice ? defaultsIn.voice : null,
-    pattern: defaultsIn.designPattern && defaultsIn.designPattern !== synced.pattern ? defaultsIn.designPattern : null,
+    voice: defaultsIn.voice && defaultsIn.voice !== (before.voice || 'am_michael') && defaultsIn.voice !== synced.voice ? defaultsIn.voice : null,
+    pattern: defaultsIn.designPattern && defaultsIn.designPattern !== (before.designPattern || 'elements') && defaultsIn.designPattern !== synced.pattern ? defaultsIn.designPattern : null,
   };
   let engineSync;
   if (wanted.voice || wanted.pattern) {

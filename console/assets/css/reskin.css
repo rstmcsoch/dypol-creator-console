@@ -796,3 +796,6 @@ details[open] > summary ~ * { animation: fold-in var(--dur-med) var(--ease-out);
   body.popup-open .tabbar { display: none; }
   .seg-up__btn { padding-inline: 6px; font-size: 14px; }
 }
+
+/* Per-navigation page holder (prevents a slow page from painting over a newer one) */
+.page-holder { display: contents; }

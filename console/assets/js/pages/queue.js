@@ -589,7 +589,7 @@ async function openJob(id) {
 }
 
 async function refresh() {
-  const root = document.getElementById('page-root');
+  const root = (document.querySelector('#page-root > .page-holder') || document.getElementById('page-root'));
   const hashParams = new URLSearchParams(location.hash.split('?')[1] || '');
   if (hashParams.get('tab') && SEGMENTS[hashParams.get('tab')] !== undefined) { view.seg = hashParams.get('tab'); view.tab = ''; }
   if (hashParams.get('status')) view.tab = hashParams.get('status');
