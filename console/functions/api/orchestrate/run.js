@@ -1,3 +1,4 @@
+import { validateVoice, validateDesignPattern } from '../_lib/voices.js';
 import { json, readBody, uid, nowIso } from '../_lib/util.js';
 import { getSettings, insertJob, addActivity, listJobs } from '../_lib/db.js';
 import { findDuplicate, classifyError, buildQuality } from '../_lib/safeguards.js';
@@ -23,6 +24,14 @@ export async function onRequestPost(context) {
   const settings = await getSettings(db);
   const mode = body.forceMode === 'draft_both' ? 'draft_both' : settings.orchestration.mode;
   const title = String(body.topic || '').trim();
+  // The kind the owner picked on the Make page wins over the plan's primary.
+  const chosen = ['gemini', 'verticals'].includes(body.engine) ? body.engine : null;
+  const v = body.voice ? validateVoice(body.voice, settings.customVoices) : null;
+  const p = body.design_pattern ? validateDesignPattern(body.design_pattern) : null;
+  const look = {
+    ...(v?.ok ? { voice: v.value } : {}),
+    ...(p?.ok ? { design_pattern: p.value } : {}),
+  };
 
   if (settings.schedule.automationPaused && body.force !== true) {
     return json(null, 409, { error: 'Automation is paused. Resume scheduling before starting runs.', code: 'paused' });
@@ -83,6 +92,7 @@ export async function onRequestPost(context) {
           auto_publish: settings.publishing.autoPublish ? '1' : '0',
           title_override: title || '',
           ...(engine === 'verticals' ? { niche: String(body.niche || settings.defaults.niche || 'tech') } : {}),
+          ...look,
         },
       });
     } catch (err) {
@@ -113,6 +123,13 @@ export async function onRequestPost(context) {
     // console's publish gate handles uploads after approval.
     const autoAllowed = settings.publishing.autoPublish === true && settings.publishing.reviewRequired === false;
     const phase = autoAllowed ? 'full' : 'draft';
+    if (chosen) {
+      await dispatch(chosen, phase);
+      return json(null, 202, {
+        ok: true, engine: chosen,
+        message: `Dispatched ${chosen === 'gemini' ? 'Long video + Short' : 'Short only'} — the kind picked on the Make page (${phase} phase).`,
+      });
+    }
     if (mode === 'alternate') {
       const engine = settings.engines?.verticals?.enabled === true && new Date().getDate() % 2 === 0 ? 'verticals' : 'gemini';
       await dispatch(engine, phase);

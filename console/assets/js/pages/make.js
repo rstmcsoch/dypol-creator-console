@@ -118,8 +118,8 @@ export async function renderMake(root, ctx = {}) {
             <div class="field__hint">Used by the Start making button above.</div>
           </div>
           <div class="more-row">
-            <div><strong>Let the system choose</strong><span class="muted">Uses your video maker plan (Settings → Advanced): main maker first, backup if it breaks.</span></div>
-            <button type="button" class="btn btn--secondary" id="mk-auto">${icon('zap', 'icon--sm')} Choose for me</button>
+            <div><strong>Start with backup</strong><span class="muted">Makes the kind you picked above. If a Long video + Short breaks, the Short-only maker tries instead.</span></div>
+            <button type="button" class="btn btn--secondary" id="mk-auto">${icon('zap', 'icon--sm')} Start with backup</button>
           </div>
           <div class="more-row">
             <div><strong>Make both and compare</strong><span class="muted">Each maker makes a version. You check both and publish the one you like.</span></div>
@@ -187,11 +187,13 @@ export async function renderMake(root, ctx = {}) {
     };
     root.querySelector('#mk-auto').onclick = async (e) => {
       const v = values();
-      if (!await confirmModal('Let the system choose?', `<p>The system starts the main video maker. If it breaks, the backup maker tries instead.</p><p class="small muted">${v.topic ? `Topic: “${esc(v.topic)}”` : 'No topic — the maker picks one.'} You still check the video before it goes up.</p>`, 'Start', false, 'Not now')) return;
+      if (!await confirmModal(`Make a ${esc(MAKERS[form.engine].name)}?`, `<p>Starts the kind you picked: <strong>${esc(MAKERS[form.engine].name)}</strong>.${form.engine === 'gemini' ? ' If it breaks, the Short-only maker tries instead.' : ''}</p><p class="small muted">${v.topic ? `Topic: “${esc(v.topic)}”` : 'No topic — the maker picks one.'} You still check the video before it goes up.</p>`, 'Start', false, 'Not now')) return;
       e.target.disabled = true;
       try {
-        await api.post('/api/orchestrate/run', { topic: v.topic, niche: v.niche });
-        started('Started!', 'The system picked a video maker. Follow it on Home.');
+        await api.post('/api/orchestrate/run', {
+          topic: v.topic, niche: v.niche, engine: form.engine, voice: v.voice, design_pattern: v.design_pattern,
+        });
+        started('Started!', `Your ${MAKERS[form.engine].name} is being made. Follow it on Home.`);
       } catch (err) { e.target.disabled = false; errorToast(err, 'Couldn’t start'); }
     };
     root.querySelector('#mk-both').onclick = async (e) => {

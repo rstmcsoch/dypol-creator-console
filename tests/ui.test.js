@@ -107,7 +107,8 @@ test('safeguards stay wired: approve confirms first, reject needs a reason, publ
   assert.match(q, /api\.jobAction\(j\.id, action, payload\)/);
   const make = read('assets/js/pages/make.js');
   assert.match(make, /confirmModal\('Make both and compare\?'/, 'make-both asks first');
-  assert.match(make, /confirmModal\('Let the system choose\?'/, 'orchestrated asks first');
+  assert.match(make, /confirmModal\(`Make a \$\{esc\(MAKERS\[form\.engine\]\.name\)\}\?`/, 'backup start asks first and names the kind');
+  assert.match(make, /orchestrate\/run', \{\s*topic: v\.topic, niche: v\.niche, engine: form\.engine/, 'sends the picked kind');
   assert.match(make, /phase: form\.phase/);
   assert.match(make, /form = \{ engine: null, phase: 'draft' \}/, 'default phase stays draft (review gate)');
   const pipe = read('assets/js/pages/pipelines.js');

@@ -16,6 +16,7 @@ const dbm = await import(`${ROOT}functions/api/_lib/db.js`);
 const flow = await import(`${ROOT}functions/api/_lib/jobflow.js`);
 const settingsApi = await import(`${ROOT}functions/api/settings.js`);
 const { onRequestPost: runPost } = await import(`${ROOT}functions/api/engines/[engine]/run.js`);
+const { onRequestPost: orchPost } = await import(`${ROOT}functions/api/orchestrate/run.js`);
 const { onRequestPost: regenPost } = await import(`${ROOT}functions/api/jobs/[id]/regenerate.js`);
 
 const A = 'rstmcsoch/gemini-youtube-automation';
@@ -252,4 +253,18 @@ test('Make + Settings UI: voice and design pattern controls, disabled Characters
   assert.match(set, /designPattern: val\('#s-default-pattern'\)/);
   assert.match(lib, /Characters — coming soon', enabled: false/);
   assert.match(lib, /\/config\/voices\.json/);
+});
+
+test('Start with backup: the kind picked on Make (Short only) goes to the Shorts maker, with voice', async () => {
+  const env = await makeEnv();
+  route('GET', '/contents/.github/workflows/verticals.yml', { body: { type: 'file', content: b64(WORKFLOW(WITH_VOICE)) } });
+  route('POST', '/dispatches', { status: 200, body: { workflow_run_id: 7301 } });
+  const res = await orchPost(ctx(env, {}, { topic: 'Picked short only probe', engine: 'verticals', voice: 'bm_george' }));
+  assert.equal(res.status, 202);
+  const d = calls.filter((c) => c.url.includes('/dispatches'));
+  assert.equal(d.length, 1);
+  assert.match(d[0].url, /youtube-shorts-pipeline/);
+  assert.equal(d[0].body.inputs.voice, 'bm_george');
+  const row = env.DB._raw.prepare('SELECT engine FROM jobs').all();
+  assert.deepEqual(row.map((r) => r.engine), ['verticals']);
 });
