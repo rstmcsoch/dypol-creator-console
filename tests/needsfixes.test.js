@@ -156,6 +156,10 @@ test('GET job / list back-fill the verdict once for older drafts, then keep it',
   const b = await addJob(env, { engine: 'verticals', runId: '902' });
   route('GET', '/contents/dypol-results/901.json', file({ needs_fixes: true, quality: { verdict: 'needs_fixes', hard_failures: FAILS } }));
   route('GET', `/contents/dypol-drafts/${b.id}.json`, file({ needs_fixes: false, quality: { verdict: 'ok', hard_failures: [] } }));
+  // The verdict is fetched after the list responds (never blocks the page); the next load shows it.
+  const bg = [];
+  await jobsGet({ ...getCtx(env, {}, 'https://c.pages.dev/api/jobs?status=needs-review'), waitUntil: (p) => bg.push(p) });
+  await Promise.all(bg);
   const res = await jobsGet(getCtx(env, {}, 'https://c.pages.dev/api/jobs?status=needs-review'));
   const data = await res.json();
   const byId = Object.fromEntries((data.data?.jobs || data.jobs).map((j) => [j.id, j]));

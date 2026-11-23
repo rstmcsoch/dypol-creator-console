@@ -3,7 +3,7 @@
    Phone: bottom tab bar (Home · Videos · Make · Settings). Desktop: slim sidebar.
    Technical pages (video makers, technical history, calendar, channel stats)
    live under "Advanced" and keep every original function. */
-import { api } from './api.js';
+import { api, clearApiCache } from './api.js';
 import { icon, toast, closeDrawer, closeModal, esc, openModal, UI_PREFS } from './ui.js';
 import { renderOverview } from './pages/overview.js';
 import { renderMake } from './pages/make.js';
@@ -126,7 +126,17 @@ async function navigate() {
   }
 }
 
+/* Speed (23 Nov): once the app is idle after sign-in, warm the data the main tabs
+   need so the first switch paints from the 20 s cache. */
+let warmed = false;
+export function warmTabs() {
+  if (warmed) return; warmed = true;
+  const go = () => { api.jobs('?sort=newest').catch(() => {}); api.settings().catch(() => {}); api.overview().catch(() => {}); };
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(go, { timeout: 4000 }); else setTimeout(go, 2000);
+}
+
 export async function refresh() {
+  clearApiCache(); // an explicit refresh (after an action) always shows fresh data
   try { state.session = await api.session(); } catch { /* 401 handled globally */ }
   await navigate();
 }
@@ -169,6 +179,7 @@ async function showApp() {
   document.getElementById('app-root').hidden = false;
   await loadPrefs();
   navigate();
+  warmTabs();
 }
 
 async function boot() {

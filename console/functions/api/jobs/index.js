@@ -23,7 +23,8 @@ export async function onRequestGet(context) {
     q: q.get('q') || undefined,
     sort: q.get('sort') || 'newest',
   });
-  const all = await listJobs(db, {});
+  const filtered = ['status', 'engine', 'type', 'niche', 'since', 'q'].some((k) => q.get(k));
+  const all = filtered ? await listJobs(db, {}) : jobs; // one D1 read when the list is unfiltered
   const counts = { all: all.length };
   for (const s of ALL_STATUSES) counts[s] = all.filter((j) => j.status === s).length;
   // Any comma-joined chip key the UI asks for is the sum of its statuses.
@@ -34,12 +35,15 @@ export async function onRequestGet(context) {
   const settings = await getSettings(db);
   // Engine verdicts for waiting drafts that don't have one yet (a few per load, in parallel).
   const todo = jobs.filter((j) => wantsEngineCheck(j)).slice(0, 6);
+  // Speed (23 Nov): never make the list wait on GitHub. The check runs after the
+  // response is sent; the next list load shows the stored verdict.
   if (todo.length) {
-    await Promise.all(todo.map(async (j) => {
+    const bg = Promise.all(todo.map(async (j) => {
       const quality = await withEngineCheck(context.env, settings, j);
       j.quality = quality;
       await updateJob(db, j.id, { quality }).catch(() => {});
-    }));
+    })).catch(() => {});
+    if (typeof context.waitUntil === 'function') context.waitUntil(bg); else await bg;
   }
   const usage = await capUsage(db);
   const deleting = await pendingDeletions(db);

@@ -11,7 +11,35 @@ class ApiError extends Error {
   }
 }
 
+/* Speed (23 Nov): short-lived GET cache so switching tabs paints at once.
+   - A fresh copy (< FRESH_MS) is reused as is.
+   - Two pages asking for the same endpoint at once share one request.
+   - Any POST/PUT/PATCH/DELETE clears the cache, so an action is never followed by stale data.
+   Progress polling uses fetch() directly and never goes through this cache. */
+const FRESH_MS = 20000;
+const NO_CACHE = /\/api\/(session|health|auth\/|jobs\/[^/?]+\/delete|.*\/progress)/;
+const cache = new Map();   // path -> { at, data }
+const inflight = new Map(); // path -> Promise
+export function clearApiCache() { cache.clear(); }
+
 async function request(method, path, body) {
+  if (method === 'GET' && !NO_CACHE.test(path)) {
+    const hit = cache.get(path);
+    if (hit && Date.now() - hit.at < FRESH_MS) return structuredClone(hit.data);
+    if (inflight.has(path)) return inflight.get(path).then((d) => structuredClone(d));
+    const p = rawRequest(method, path, body)
+      .then((d) => { cache.set(path, { at: Date.now(), data: d }); return d; })
+      .finally(() => inflight.delete(path));
+    inflight.set(path, p);
+    return p.then((d) => structuredClone(d));
+  }
+  if (method !== 'GET') cache.clear();
+  const out = await rawRequest(method, path, body);
+  if (method !== 'GET') cache.clear(); // results of the action must show right away
+  return out;
+}
+
+async function rawRequest(method, path, body) {
   let res;
   try {
     res = await fetch(path, {

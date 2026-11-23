@@ -9,6 +9,8 @@ import { backgroundReconcile } from './_lib/jobflow.js';
  * counts are distinguished; engine readiness is probed (never assumed);
  * workflow success is NOT treated as upload success.
  */
+const probeCache = {};
+
 export async function onRequestGet(context) {
   backgroundReconcile(context);
   const db = context.env.DB;
@@ -51,7 +53,17 @@ export async function onRequestGet(context) {
       return { state: 'error', detail: err.message.slice(0, 120) };
     }
   };
-  const [probeA, probeB] = await Promise.all([probe('gemini'), probe('verticals')]);
+  // Speed (23 Nov): reuse each engine's probe for 2 minutes per worker, and never
+  // wait more than 1.5 s on GitHub (the card then says "unverified" and retries next time).
+  const cachedProbe = async (engine) => {
+    const hit = probeCache[engine];
+    if (hit && Date.now() - hit.at < 120000) return hit.value;
+    const timeout = new Promise((r) => setTimeout(() => r({ state: 'unverified', detail: 'GitHub is slow right now', slow: true }), 1500));
+    const value = await Promise.race([probe(engine), timeout]);
+    if (!value.slow) probeCache[engine] = { at: Date.now(), value };
+    return value;
+  };
+  const [probeA, probeB] = await Promise.all([cachedProbe('gemini'), cachedProbe('verticals')]);
 
   const lastRunFor = (engine) => runs.find((r) => r.engine === engine) || null;
   const engineCard = (id, name, badge, tagline, description, probeResult) => {

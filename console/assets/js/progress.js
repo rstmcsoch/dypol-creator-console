@@ -101,7 +101,9 @@ export function mountProgress(el, url, { onDone, showWhenDone = true } = {}) {
         return;
       }
     }
-    activeTimer = setTimeout(tick, (p && p.pollAfterMs) || POLL_MS);
+    // Pause while the tab/app is in the background; one tick resumes it.
+    const wait = document.visibilityState === 'hidden' ? 30000 : ((p && p.pollAfterMs) || POLL_MS);
+    activeTimer = setTimeout(tick, wait);
   };
   tick();
 }
