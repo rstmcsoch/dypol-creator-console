@@ -239,10 +239,11 @@ test('review popup has an "Upload to YouTube" row under the player (no old foote
   assert.match(css, /\.seg-up__btn \{[^}]*min-height: 48px/);
   assert.match(css, /\.upload-row\.is-off \.seg-up__btn/);
   const m480 = css.slice(css.lastIndexOf('@media (max-width: 480px)'));
-  assert.match(m480, /width: 100vw; height: 100dvh/);
-  assert.match(m480, /overflow-y: auto/);
-  assert.match(m480, /46dvh/);
-  assert.match(m480, /body\.popup-open \.tabbar \{ display: none; \}/);
+  assert.match(m480, /width: calc\(100vw - 16px\);\s*height: calc\(100vh - 16px\); height: calc\(100dvh - 16px\)/, 'phone popup keeps a small gap on every side');
+  assert.match(css, /\.drawer\.drawer--popup \.drawer__body \{[^}]*overflow-y: auto/);
+  assert.match(css, /46dvh/);
+  assert.match(css, /body\.popup-open \.tabbar \{ display: none; \}/);
+  assert.match(css, /height: min\(90dvh, calc\(100dvh - 32px\)\)/, 'tablet/desktop popup never touches top or bottom');
 });
 
 test('uploadRowState over statuses', async () => {
